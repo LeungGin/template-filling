@@ -1,0 +1,19 @@
+{
+  "author": "Gin",
+  "table": {
+    "name": "x_demo_table",
+    "comment": "This is a template filling demo table"
+  },
+  "custom_fields": [
+    {
+      "name": "hobby",
+      "type": "varchar(100)",
+      "comment": "personal hobby"
+    },
+    {
+      "name": "address",
+      "type": "varchar(1000)",
+      "comment": "personal address"
+    }
+  ]
+}

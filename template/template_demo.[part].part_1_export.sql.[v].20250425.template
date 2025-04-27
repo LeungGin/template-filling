@@ -1,0 +1,29 @@
+/*
+create by {{ author }}
+create in {{ @now }}
+*/
+
+-- Table {{table.name}}
+CREATE TABLE {{table.name}} (
+    id SERIAL PRIMARY KEY,
+    first_name VARCHAR(50) NOT NULL,
+    last_name VARCHAR(50) NOT NULL,
+    {% for field in custom_fields %}
+      {$ join_with = \n $}
+      {{field.name}} {{field.type}}, -- {{field.comment}}
+    {% endfor %}
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Table {{table.name}} comment
+COMMENT ON TABLE {{table.name}} IS {{table.comment}};
+COMMENT ON COLUMN {{table.name}}.id IS 'Identifier';
+COMMENT ON COLUMN {{table.name}}.first_name IS 'First name';
+COMMENT ON COLUMN {{table.name}}.last_name IS 'Last name';
+{% for field in custom_fields %}
+  {$ join_with = \n $}
+  COMMENT ON COLUMN {{table.name}}.{{field.name}} IS '{{field.comment}}';
+{% endfor %}
+COMMENT ON COLUMN {{table.name}}.created_at IS 'Created at';
+COMMENT ON COLUMN {{table.name}}.updated_at IS 'Updated at';
