@@ -1,127 +1,227 @@
-use std::borrow::Cow;
+use std::str;
 
-use chrono::Local;
-use regex::{Captures, Regex};
-use serde::Deserialize;
 use serde_json::Value;
 
-#[derive(Deserialize)]
-pub struct PlaceholderDefine {
-    pub env: String,
-    pub template: String,
-    pub fill_type: String,
-    #[serde(default)]
-    pub separator: String,
-}
-
 pub fn fill_template(template_content: String, data: &Value) -> String {
-    // syntax mark
-    let template_content = syntax_mark(&template_content);
-    // replace all ${}
-    let replaced = fill_template_0(&template_content, data, data);
-    // replace all ${{}}
-    let regex = Regex::new(r"\$\{(\{[\s\S]*?\})\}").expect("Create placeholder S{{}} regex fail");
-    let replaced = regex.replace_all(&replaced, |caps: &Captures<'_>| {
-        let placeholder_define_json = caps.get(1).unwrap().as_str();
-        let placeholder_define: PlaceholderDefine = serde_json::from_str(placeholder_define_json)
-            .expect("Parse placeholder define json fail");
+    // Generate tokens
+    let bytes = template_content.as_bytes();
+    let tokens = generate_tokens(bytes);
+    // debug
+    println!("{:?}", tokens);
+    // Fill with token
+    fill(bytes, tokens, data)
+}
 
-        if placeholder_define.fill_type == "loop" {
-            let loop_data = data.get(placeholder_define.env);
-            if let Some(loop_data) = loop_data {
-                if loop_data.is_array() {
-                    let loop_items = loop_data.as_array().unwrap();
-                    let mut loop_replaced_items: Vec<String> = Vec::with_capacity(loop_items.len());
-                    for item_data in loop_items {
-                        let item_replaced =
-                            fill_template_0(&placeholder_define.template, data, item_data);
-                        loop_replaced_items.push(item_replaced.to_string());
-                    }
-                    loop_replaced_items.join(&placeholder_define.separator)
-                } else {
-                    caps.get(0).unwrap().as_str().to_owned()
+#[derive(Debug)]
+enum Symbol {
+    Logical,
+    Env,
+    Placeholder,
+}
+
+#[derive(Debug)]
+enum Token<'a> {
+    Text(usize, usize),
+    Placeholder(usize, usize),
+    Env(usize, usize),
+    Tag(Tag<'a>, Vec<Token<'a>>),
+}
+
+fn generate_tokens(template_content_bytes: &[u8]) -> Vec<Token> {
+    let mut tokens: Vec<Token> = Vec::new();
+    let mut head_symbol_stack: Vec<(Symbol, usize)> = Vec::with_capacity(1);
+    let mut tag_token_stack: Vec<Token> = Vec::new();
+    let mut last_pos = 0;
+
+    let bytes = template_content_bytes;
+    let mut i = 0;
+    let len = bytes.len().saturating_sub(1);
+    while i < len {
+        match (&bytes[i], &bytes[i + 1]) {
+            (b'{', b'%') => {
+                if last_pos < i {
+                    tokens.push(Token::Text(last_pos, i));
+                    last_pos = i;
                 }
-            } else {
-                caps.get(0).unwrap().as_str().to_owned()
+                head_symbol_stack.push((Symbol::Logical, i + 2));
+                last_pos += 2;
+                i += 2;
             }
-        } else {
-            // fill_type == 'value'
-            let local_data = data.get(placeholder_define.env);
-            if let Some(local_data) = local_data {
-                fill_template_0(&placeholder_define.template, data, local_data).to_string()
+            (b'%', b'}') => {
+                if let Some((Symbol::Logical, start_idx)) = head_symbol_stack.pop() {
+                    let tag = generate_tag(&bytes[start_idx..i]);
+                    match tag {
+                        Tag::For(_, _) => {
+                            tag_token_stack.push(Token::Tag(tag, Vec::new()));
+                        }
+                        Tag::EndFor => {
+                            // TODO sub_tokens未正确赋值
+                            if let Some(Token::Tag(head_tag, mut sub_tokens)) =
+                                tag_token_stack.pop()
+                            {
+                                match head_tag {
+                                    Tag::For(_, _) => {
+                                        sub_tokens.push(Token::Text(last_pos, i));
+                                        last_pos = i;
+                                        if let Some(Token::Tag(
+                                            parent_head_tag,
+                                            mut parent_sub_tokens,
+                                        )) = tag_token_stack.pop()
+                                        {
+                                            parent_sub_tokens
+                                                .push(Token::Tag(head_tag, sub_tokens));
+                                            tag_token_stack.push(Token::Tag(
+                                                parent_head_tag,
+                                                parent_sub_tokens,
+                                            ));
+                                        } else {
+                                            tokens.push(Token::Tag(head_tag, sub_tokens));
+                                        }
+                                    }
+                                    _ => panic!("Tag must be balanced"),
+                                }
+                            } else {
+                                panic!("Missing opening tag");
+                            }
+                        }
+                        Tag::If(_, _, _) => {
+                            tag_token_stack.push(Token::Tag(tag, Vec::new()));
+                        }
+                        Tag::EndIf => {
+                            if let Some(Token::Tag(head_tag, mut sub_tokens)) =
+                                tag_token_stack.pop()
+                            {
+                                match head_tag {
+                                    Tag::If(_, _, _) => {
+                                        sub_tokens.push(Token::Text(last_pos, i));
+                                        last_pos = i;
+                                        if let Some(Token::Tag(
+                                            parent_head_tag,
+                                            mut parent_sub_tokens,
+                                        )) = tag_token_stack.pop()
+                                        {
+                                            parent_sub_tokens
+                                                .push(Token::Tag(head_tag, sub_tokens));
+                                            tag_token_stack.push(Token::Tag(
+                                                parent_head_tag,
+                                                parent_sub_tokens,
+                                            ));
+                                        } else {
+                                            tokens.push(Token::Tag(head_tag, sub_tokens));
+                                        }
+                                    }
+                                    _ => panic!("Tag must be balanced"),
+                                }
+                            } else {
+                                panic!("Missing opening tag");
+                            }
+                        }
+                    }
+                    last_pos = i + 2;
+                    i += 2;
+                } else {
+                    panic!("Symbols must be balanced: {{% %}}");
+                }
+            }
+            (b'{', b'$') => {
+                if last_pos < i {
+                    tokens.push(Token::Text(last_pos, i));
+                    last_pos = i;
+                }
+                head_symbol_stack.push((Symbol::Env, i + 2));
+                last_pos += 2;
+                i += 2;
+            }
+            (b'$', b'}') => {
+                if let Some((Symbol::Env, start_idx)) = head_symbol_stack.pop() {
+                    tokens.push(Token::Env(start_idx, i));
+                    last_pos = i + 2;
+                } else {
+                    panic!("Symbols must be balanced: {{$ $}}");
+                }
+                i += 2;
+            }
+            (b'{', b'{') => {
+                if last_pos < i {
+                    tokens.push(Token::Text(last_pos, i));
+                    last_pos = i;
+                }
+                head_symbol_stack.push((Symbol::Placeholder, i + 2));
+                last_pos += 2;
+                i += 2;
+            }
+            (b'}', b'}') => {
+                if let Some((Symbol::Placeholder, start_idx)) = head_symbol_stack.pop() {
+                    tokens.push(Token::Placeholder(start_idx, i));
+                    last_pos = i + 2;
+                    i += 2;
+                } else {
+                    panic!("Symbols must be balanced: {{{{ }}}}");
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    tokens.push(Token::Text(last_pos, bytes.len()));
+    tokens
+}
+
+#[derive(Debug)]
+enum Tag<'a> {
+    For(&'a str, &'a str),
+    EndFor,
+    If(&'a str, &'a str, &'a str),
+    EndIf,
+}
+
+fn generate_tag(tag_bytes: &[u8]) -> Tag {
+    let tag_text = str::from_utf8(tag_bytes)
+        .expect("Convert to str fail")
+        .trim();
+    match tag_text {
+        "endfor" => Tag::EndFor,
+        "endif" => Tag::EndIf,
+        _ => {
+            if tag_text.starts_with("for ") {
+                let tag_slices: Vec<&str> = tag_text.splitn(4, ' ').collect();
+                if tag_slices.len() != 4 || *tag_slices.get(2).unwrap() != "in" {
+                    panic!("Illegal expression: for")
+                }
+                let item_name = tag_slices.get(1).unwrap();
+                let collect_name = tag_slices.get(3).unwrap();
+                Tag::For(item_name, collect_name)
+            } else if tag_text.starts_with("if ") {
+                let tag_slices: Vec<&str> = tag_text.splitn(4, ' ').collect();
+                if tag_slices.len() != 4 || *tag_slices.get(2).unwrap() != "==" {
+                    panic!("Illegal expression: if")
+                }
+                let exprn_left = tag_slices.get(1).unwrap();
+                let exprn_right = tag_slices.get(3).unwrap();
+                Tag::If(exprn_left, "==", exprn_right)
             } else {
-                caps.get(0).unwrap().as_str().to_owned()
+                panic!("Unsupported tag")
             }
         }
-    });
-    replaced.to_string()
+    }
 }
 
-fn syntax_mark(template_content: &String) -> String {
-    // for-in
-    let regex = Regex::new(r"\{\%\s*for\s+(.+?)\s+in\s+(.+?)\%\}([\s\S]*?)\{\%\s*endfor\s*\%\}")
-        .expect("Create placeholder {%for in%}{%endfor%} regex fail");
-    let marked = regex.replace_all(&template_content, |caps: &Captures<'_>| {
-        println!("{}", caps.get(0).unwrap().as_str().to_owned());
-        caps.get(0).unwrap().as_str().to_owned()
-    });
-    println!("{}", marked);
-    template_content.to_owned()
-}
+fn fill(template_content_bytes: &[u8], tokens: Vec<Token>, data: &Value) -> String {
+    let mut filled = String::new();
 
-fn fill_template_0<'a>(
-    template_content: &'a String,
-    global_data: &'a Value,
-    local_data: &'a Value,
-) -> Cow<'a, str> {
-    let regex = Regex::new(r"\{\{([\s\S]*?)\}\}").expect("Create placeholder {{}} regex fail");
-    regex.replace_all(&template_content, |caps: &Captures<'_>| {
-        let placeholder = caps.get(1).unwrap().as_str();
-        if placeholder.starts_with("@") {
-            get_system_env(placeholder).unwrap_or(caps.get(0).unwrap().as_str().to_owned())
-        } else {
-            if placeholder.starts_with(".") {
-                // local env
-                get_by_step_in_key(local_data, placeholder)
-                    .unwrap_or(caps.get(0).unwrap().as_str().to_owned())
-            } else {
-                // global env
-                get_by_step_in_key(global_data, placeholder)
-                    .unwrap_or(caps.get(0).unwrap().as_str().to_owned())
+    let bytes = template_content_bytes;
+    for token in tokens {
+        match token {
+            Token::Tag(tag, sub_tokens) => {
+                todo!()
             }
+            Token::Text(start, end) => {
+                filled.push_str(
+                    str::from_utf8(&bytes[start..end]).expect("Convert &[u8] to &str fail"),
+                );
+            }
+            _ => (),
         }
-    })
-}
+    }
 
-fn get_system_env(env: &str) -> Option<String> {
-    if env == "@now" {
-        return Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
-    }
-    None
-}
-
-fn get_by_step_in_key(mut data: &Value, key: &str) -> Option<String> {
-    if !key.contains(".") {
-        return data.get(key).map_or(None, |v| Some(to_pure_string(v)));
-    }
-    let keys: Vec<&str> = key.split(".").filter(|&x| !x.is_empty()).collect();
-    for k in keys {
-        if !data.is_object() {
-            return None;
-        }
-        let v = data.get(k);
-        if v.is_none() {
-            return None;
-        }
-        data = v.unwrap();
-    }
-    Some(to_pure_string(data))
-}
-
-fn to_pure_string(v: &Value) -> String {
-    if v.is_string() {
-        v.as_str().unwrap().to_owned()
-    } else {
-        v.to_string()
-    }
+    filled
 }

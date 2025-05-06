@@ -1,6 +1,8 @@
+-- The defaut value of indent_base is tag
+{$ indent_base = tag $}
 /*
-create by {{ author }}
-create in {{ @now }}
+Create by {{author}}
+Create in {{@now}}
 */
 
 -- Table {{table.name}}
@@ -8,9 +10,11 @@ CREATE TABLE {{table.name}} (
     id SERIAL PRIMARY KEY,
     first_name VARCHAR(50) NOT NULL,
     last_name VARCHAR(50) NOT NULL,
+    -- Default indent_base is 'inherit', here is 'tag' because of global env define is 'tag'
     {% for field in custom_fields %}
       {$ join_with = \n $}
       {{field.name}} {{field.type}}, -- {{field.comment}}
+      {% if {{@index}} == {{@max}} %}-- ending text demo: last index is {{@index}}, max is {{@max}}{% endif %}
     {% endfor %}
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -21,7 +25,9 @@ COMMENT ON TABLE {{table.name}} IS {{table.comment}};
 COMMENT ON COLUMN {{table.name}}.id IS 'Identifier';
 COMMENT ON COLUMN {{table.name}}.first_name IS 'First name';
 COMMENT ON COLUMN {{table.name}}.last_name IS 'Last name';
+-- Define custom indent_base as 'raw', indent based on the literal indentation
 {% for field in custom_fields %}
+  {$ indent_base = raw $}
   {$ join_with = \n $}
   COMMENT ON COLUMN {{table.name}}.{{field.name}} IS '{{field.comment}}';
 {% endfor %}
