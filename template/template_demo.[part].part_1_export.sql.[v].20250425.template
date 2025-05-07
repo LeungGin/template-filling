@@ -1,5 +1,8 @@
 -- The defaut value of indent_base is tag
 {$ indent_base = tag $}
+
+-- The kind of Symbol has: {#{%..%} {$..$} {{..}} {#..#}#}
+
 /*
 Create by {{author}}
 Create in {{@now}}
@@ -14,7 +17,7 @@ CREATE TABLE {{table.name}} (
     {% for field in custom_fields %}
       {$ join_with = \n $}
       {{field.name}} {{field.type}}, -- {{field.comment}}
-      {% if {{@index}} == {{@max}} %}-- ending text demo: last index is {{@index}}, max is {{@max}}{% endif %}
+      {% if @index == @max %}-- ending text demo: last index is {{@index}}, max is {{@max}}{% endif %}
     {% endfor %}
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
