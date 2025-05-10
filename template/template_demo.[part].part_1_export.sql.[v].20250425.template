@@ -16,6 +16,7 @@ CREATE TABLE {{table.name}} (
     -- Default indent_base is 'inherit', here is 'tag' because of global env define is 'tag'
     {% for field in custom_fields %}
       {$ join_with = \n $}
+      -- @index is {{@index}}, @max is {{@max}}
       {{field.name}} {{field.type}}, -- {{field.comment}}
       {% if @index == @max %}-- ending text demo: last index is {{@index}}, max is {{@max}}{% endif %}
     {% endfor %}
@@ -24,7 +25,7 @@ CREATE TABLE {{table.name}} (
 );
 
 -- Table {{table.name}} comment
-COMMENT ON TABLE {{table.name}} IS {{table.comment}};
+COMMENT ON TABLE {{table.name}} IS '{{table.comment}}';
 COMMENT ON COLUMN {{table.name}}.id IS 'Identifier';
 COMMENT ON COLUMN {{table.name}}.first_name IS 'First name';
 COMMENT ON COLUMN {{table.name}}.last_name IS 'Last name';

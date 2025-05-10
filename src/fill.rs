@@ -1,6 +1,7 @@
-use std::str;
+use std::{cell::RefCell, collections::HashMap, rc::Rc, str};
 
-use serde_json::Value;
+use chrono::Local;
+use serde_json::{json, Value};
 
 pub fn fill_template(template_content: String, data: &Value) -> String {
     // Generate tokens
@@ -9,7 +10,7 @@ pub fn fill_template(template_content: String, data: &Value) -> String {
     // debug
     println!("{:?}", tokens);
     // Fill with token
-    fill(bytes, tokens, data)
+    fill(bytes, &tokens, &mut AutoDataContext::new(data))
 }
 
 #[derive(Debug)]
@@ -54,7 +55,7 @@ impl<'a> GenerateTokensContext<'a> {
             if let Token::Tag(_, sub_tokens) = self.tag_token_stack.last_mut().unwrap() {
                 sub_tokens.push(token);
             } else {
-                panic!("An impossible error")
+                panic!("An impossible error when push token")
             }
         }
     }
@@ -150,6 +151,9 @@ fn generate_tokens(template_content_bytes: &[u8]) -> Vec<Token> {
             (b'$', b'}') => {
                 if let Some((Symbol::Env, _)) = ctx.head_symbol_stack.last() {
                     let (_, start_idx) = ctx.head_symbol_stack.pop().unwrap();
+                    if !bytes[start_idx..i].contains(&b'=') {
+                        panic!("Env symbol missing '=', it should be define like '{{$ key = value $}}'")
+                    }
                     ctx.push_token(Token::Env(start_idx, i));
                     ctx.last_pos = i + 2;
                 }
@@ -182,6 +186,12 @@ fn generate_tokens(template_content_bytes: &[u8]) -> Vec<Token> {
                 ctx.last_pos += 2;
                 i += 2;
             }
+            // (b'\r', b'\n') => {
+            //     continue; // TODO
+            // }
+            // (b'\n', _) => {
+            //     continue; // TODO
+            // }
             _ => i += 1,
         }
     }
@@ -191,8 +201,10 @@ fn generate_tokens(template_content_bytes: &[u8]) -> Vec<Token> {
 
 #[derive(Debug)]
 enum Tag<'a> {
+    // for str1 in str2
     For(&'a str, &'a str),
     EndFor,
+    // if str1 <str2> str3
     If(&'a str, &'a str, &'a str),
     EndIf,
 }
@@ -228,20 +240,194 @@ fn generate_tag(tag_bytes: &[u8]) -> Tag {
     }
 }
 
-fn fill(template_content_bytes: &[u8], tokens: Vec<Token>, data: &Value) -> String {
+struct AutoDataContext<'a> {
+    scope_stack: Rc<RefCell<Vec<Value>>>,
+    sys: HashMap<&'a str, String>,
+    data: &'a Value,
+}
+
+impl<'a> AutoDataContext<'a> {
+    pub fn new(data: &'a Value) -> Self {
+        let mut s = Self {
+            sys: HashMap::new(),
+            scope_stack: Rc::new(RefCell::new(Vec::new())),
+            data,
+        };
+        // setting system env value
+        s.set_sys("@now", Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+        // Add root scope
+        s.push_scope();
+        s
+    }
+
+    pub fn get_string(&self, key: &str) -> Option<String> {
+        // 1st, scope (step-by-step loop)
+        for scope in Rc::clone(&self.scope_stack).borrow().iter().rev() {
+            if let Some(v) = self.get_string_by_step_in_key(scope, key) {
+                return Some(v.to_string());
+            }
+        }
+        // 2nd, system env
+        if let Some(v) = self.sys.get(key) {
+            return Some(v.to_string());
+        }
+        // 3th, custom global data(step-by-step loop)
+        self.get_string_by_step_in_key(self.data, key)
+    }
+
+    pub fn get_array(&self, key: &str) -> Option<Vec<Value>> {
+        // 1st, scope (step-by-step loop)
+        for scope in Rc::clone(&self.scope_stack).borrow().iter().rev() {
+            if let Some(val) = self.get_by_step_in_key(scope, key) {
+                if val.is_array() {
+                    return val.as_array().cloned();
+                }
+            }
+        }
+        // 2nd, custom global data(step-by-step loop)
+        if let Some(val) = self.get_by_step_in_key(self.data, key) {
+            if val.is_array() {
+                return val.as_array().cloned();
+            }
+        }
+        None
+    }
+
+    fn get_string_by_step_in_key(&self, data: &Value, key: &str) -> Option<String> {
+        if let Some(val) = self.get_by_step_in_key(data, key) {
+            return Some(self.to_pure_string(&val));
+        }
+        None
+    }
+
+    fn get_by_step_in_key<'b>(&self, data: &'b Value, key: &str) -> Option<&'b Value> {
+        if !key.contains(".") {
+            return data.get(key).map_or(None, |v| Some(v));
+        }
+
+        let mut target = data;
+        let keys: Vec<&str> = key.split(".").filter(|&x| !x.is_empty()).collect();
+        for k in keys {
+            if !target.is_object() {
+                return None;
+            }
+            let v = target.get(k);
+            if v.is_none() {
+                return None;
+            }
+            target = v.unwrap();
+        }
+        Some(target)
+    }
+
+    fn to_pure_string(&self, v: &Value) -> String {
+        if v.is_string() {
+            v.as_str().unwrap().to_owned()
+        } else {
+            v.to_string()
+        }
+    }
+
+    pub fn set_scope_with_string(&self, key: &'a str, val: String) {
+        if let Some(scope) = Rc::clone(&self.scope_stack).borrow_mut().last_mut() {
+            scope[key] = Value::String(val);
+            return;
+        }
+        panic!("No data scope be found, need to add scope first")
+    }
+
+    pub fn set_scope_with_value(&self, key: &'a str, val: Value) {
+        if let Some(scope) = Rc::clone(&self.scope_stack).borrow_mut().last_mut() {
+            scope[key] = val;
+            return;
+        }
+        panic!("No data scope be found, need to add scope first")
+    }
+
+    pub fn set_sys(&mut self, key: &'a str, val: String) {
+        self.sys.insert(key, val);
+    }
+
+    pub fn push_scope(&self) {
+        Rc::clone(&self.scope_stack).borrow_mut().push(json!({}));
+    }
+
+    pub fn pop_scope(&mut self) {
+        Rc::clone(&self.scope_stack).borrow_mut().pop();
+    }
+}
+
+fn fill(template_bytes: &[u8], tokens: &Vec<Token>, data_ctx: &mut AutoDataContext) -> String {
     let mut filled = String::new();
 
-    let bytes = template_content_bytes;
     for token in tokens {
         match token {
-            Token::Text(start, end) => {
-                filled.push_str(
-                    str::from_utf8(&bytes[start..end]).expect("Convert &[u8] to &str fail"),
-                );
+            Token::Tag(tag, sub_tokens) => match tag {
+                Tag::For(item_key, array_key) => {
+                    if let Some(array) = data_ctx.get_array(array_key) {
+                        data_ctx.push_scope();
+                        data_ctx.set_scope_with_string("@max", (array.len() - 1).to_string());
+                        for i in 0..array.len() {
+                            let item = array.get(i).unwrap();
+                            if item.is_object() {
+                                data_ctx.push_scope();
+                                data_ctx.set_scope_with_string("@index", i.to_string());
+                                data_ctx.set_scope_with_value(item_key, item.clone());
+                                let replaced = fill(template_bytes, sub_tokens, data_ctx);
+                                filled.push_str(&replaced);
+                                data_ctx.pop_scope();
+                            }
+                        }
+                        data_ctx.pop_scope();
+                    }
+                }
+                Tag::If(left, operator, right) => match *operator {
+                    "==" => {
+                        let left = get_variable_in_tag(&data_ctx, *left);
+                        let right = get_variable_in_tag(&data_ctx, *right);
+                        if left.is_some() && right.is_some() && left.unwrap() == right.unwrap() {
+                            let replaced = fill(template_bytes, sub_tokens, data_ctx);
+                            filled.push_str(&replaced);
+                        }
+                    }
+                    _ => panic!("Unsupported if's operator: {}", operator),
+                },
+                _ => panic!("An impossible error when parse tag token"),
+            },
+            Token::Env(start, end) => {
+                let (k, v) = bytes_to_str(template_bytes, *start, *end)
+                    .split_once("=")
+                    .unwrap();
+                data_ctx.set_scope_with_string(k, v.to_owned());
             }
-            _ => (),
+            Token::Placeholder(start, end) => {
+                let placeholder = bytes_to_str(template_bytes, *start, *end);
+                let replaced = match data_ctx.get_string(placeholder) {
+                    Some(v) => v,
+                    None => format!("{{{{{}}}}}", placeholder),
+                };
+                filled.push_str(&replaced);
+            }
+            Token::Text(start, end) => {
+                filled.push_str(bytes_to_str(template_bytes, *start, *end));
+            }
         }
     }
 
     filled
+}
+
+fn bytes_to_str(bytes: &[u8], start: usize, end: usize) -> &str {
+    str::from_utf8(&bytes[start..end]).expect("Convert &[u8] to &str fail")
+}
+
+fn get_variable_in_tag(data_ctx: &AutoDataContext, variable: &str) -> Option<String> {
+    if variable.len() > 1 {
+        if variable.starts_with("@") {
+            return data_ctx.get_string(&variable);
+        } else if variable.starts_with("$") {
+            return data_ctx.get_string(&variable[1..variable.len()]);
+        }
+    }
+    Some(variable.to_string())
 }
