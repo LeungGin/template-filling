@@ -22,42 +22,111 @@ enum Symbol {
 }
 
 #[derive(Debug)]
-enum Token<'a> {
-    Text(usize, usize),
-    Placeholder(usize, usize),
-    Env(usize, usize),
-    Tag(Tag<'a>, Vec<Token<'a>>),
+enum Token {
+    Text(TokenContext),
+    Placeholder(TokenContext),
+    Env(TokenContext),
+    Tag(TokenContext, TagExtend),
 }
 
-struct GenerateTokensContext<'a> {
-    pub tokens: Vec<Token<'a>>,
+#[derive(Debug)]
+struct TokenContext {
+    start: usize,
+    end: usize,
+    in_tag: bool,
+    first_in_row: Option<bool>,
+    indent: Option<String>,
+}
+
+#[derive(Debug)]
+struct TagExtend {
+    tag: Tag,
+    sub_tokens: Vec<Token>,
+}
+
+impl Token {
+    pub fn new_text(ctx: &GenerateTokensContext, start: usize, end: usize) -> Token {
+        Token::Text(TokenContext {
+            start,
+            end,
+            in_tag: ctx.now_in_tag(),
+            first_in_row: None,
+            indent: None,
+        })
+    }
+
+    pub fn new_placeholder(ctx: &GenerateTokensContext, start: usize, end: usize) -> Token {
+        Token::Placeholder(TokenContext {
+            start,
+            end,
+            in_tag: ctx.now_in_tag(),
+            first_in_row: None,
+            indent: None,
+        })
+    }
+
+    pub fn new_env(ctx: &GenerateTokensContext, start: usize, end: usize) -> Token {
+        Token::Env(TokenContext {
+            start,
+            end,
+            in_tag: ctx.now_in_tag(),
+            first_in_row: None,
+            indent: None,
+        })
+    }
+
+    pub fn new_tag(ctx: &GenerateTokensContext, tag: Tag) -> Token {
+        Token::Tag(
+            TokenContext {
+                start: 0,
+                end: 0,
+                in_tag: ctx.now_in_tag(),
+                first_in_row: None,
+                indent: None,
+            },
+            TagExtend {
+                tag,
+                sub_tokens: Vec::new(),
+            },
+        )
+    }
+}
+
+struct GenerateTokensContext {
+    pub tokens: Vec<Token>,
     pub head_symbol_stack: Vec<(Symbol, usize)>,
-    pub tag_token_stack: Vec<Token<'a>>,
-    pub now_in_raw_symbol: bool,
+    pub tag_token_stack: Vec<Token>,
+    pub now_in_raw: bool,
     pub last_pos: usize,
 }
 
-impl<'a> GenerateTokensContext<'a> {
+impl<'a> GenerateTokensContext {
     fn new() -> Self {
         Self {
             tokens: Vec::new(),
             head_symbol_stack: Vec::with_capacity(1),
             tag_token_stack: Vec::new(),
-            now_in_raw_symbol: false,
+            now_in_raw: false,
             last_pos: 0,
         }
     }
 
-    pub fn push_token(&mut self, token: Token<'a>) {
+    pub fn push_token(&mut self, token: Token) {
         if self.tag_token_stack.is_empty() {
             self.tokens.push(token);
         } else {
-            if let Token::Tag(_, sub_tokens) = self.tag_token_stack.last_mut().unwrap() {
+            if let Token::Tag(_, TagExtend { sub_tokens, .. }) =
+                self.tag_token_stack.last_mut().unwrap()
+            {
                 sub_tokens.push(token);
             } else {
                 panic!("An impossible error when push token")
             }
         }
+    }
+
+    pub fn now_in_tag(&self) -> bool {
+        !self.tag_token_stack.is_empty()
     }
 }
 
@@ -69,15 +138,15 @@ fn generate_tokens(template_content_bytes: &[u8]) -> Vec<Token> {
     let len = bytes.len().saturating_sub(1);
     while i < len {
         // Raw
-        if ctx.now_in_raw_symbol {
+        if ctx.now_in_raw {
             if bytes[i] == b'#' && bytes[i + 1] == b'}' {
                 if let Some((Symbol::Raw, _)) = ctx.head_symbol_stack.last() {
                     let (_, start_idx) = ctx.head_symbol_stack.pop().unwrap();
-                    ctx.push_token(Token::Text(start_idx, i));
+                    ctx.push_token(Token::new_text(&ctx, start_idx, i));
                     ctx.last_pos = i + 2;
                 }
                 i += 2;
-                ctx.now_in_raw_symbol = false;
+                ctx.now_in_raw = false;
                 continue;
             } else {
                 i += 1;
@@ -88,7 +157,7 @@ fn generate_tokens(template_content_bytes: &[u8]) -> Vec<Token> {
         match (&bytes[i], &bytes[i + 1]) {
             (b'{', b'%') => {
                 if ctx.last_pos < i {
-                    ctx.push_token(Token::Text(ctx.last_pos, i));
+                    ctx.push_token(Token::new_text(&ctx, ctx.last_pos, i));
                     ctx.last_pos = i;
                 }
                 ctx.head_symbol_stack.push((Symbol::Logical, i + 2));
@@ -101,15 +170,19 @@ fn generate_tokens(template_content_bytes: &[u8]) -> Vec<Token> {
                     let tag = generate_tag(&bytes[start_idx..i]);
                     match tag {
                         Tag::For(_, _) => {
-                            ctx.tag_token_stack.push(Token::Tag(tag, Vec::new()));
+                            ctx.tag_token_stack.push(Token::new_tag(&ctx, tag));
                         }
                         Tag::EndFor => {
-                            if let Some(Token::Tag(head_tag, sub_tokens)) =
+                            if let Some(Token::Tag(_, TagExtend { tag, sub_tokens })) =
                                 ctx.tag_token_stack.pop()
                             {
-                                match head_tag {
+                                match tag {
                                     Tag::For(_, _) => {
-                                        ctx.push_token(Token::Tag(head_tag, sub_tokens));
+                                        let mut final_tag = Token::new_tag(&ctx, tag);
+                                        if let Token::Tag(_, ref mut ext) = final_tag {
+                                            ext.sub_tokens = sub_tokens
+                                        }
+                                        ctx.push_token(final_tag);
                                     }
                                     _ => panic!("Tag must be balanced"),
                                 }
@@ -118,15 +191,14 @@ fn generate_tokens(template_content_bytes: &[u8]) -> Vec<Token> {
                             }
                         }
                         Tag::If(_, _, _) => {
-                            ctx.tag_token_stack.push(Token::Tag(tag, Vec::new()));
+                            ctx.tag_token_stack.push(Token::new_tag(&ctx, tag));
                         }
                         Tag::EndIf => {
-                            if let Some(Token::Tag(head_tag, sub_tokens)) =
-                                ctx.tag_token_stack.pop()
-                            {
-                                match head_tag {
+                            let token = ctx.tag_token_stack.pop();
+                            if let Some(Token::Tag(_, ref ext)) = token {
+                                match ext.tag {
                                     Tag::If(_, _, _) => {
-                                        ctx.push_token(Token::Tag(head_tag, sub_tokens));
+                                        ctx.push_token(token.unwrap());
                                     }
                                     _ => panic!("Tag must be balanced"),
                                 }
@@ -141,7 +213,7 @@ fn generate_tokens(template_content_bytes: &[u8]) -> Vec<Token> {
             }
             (b'{', b'$') => {
                 if ctx.last_pos < i {
-                    ctx.push_token(Token::Text(ctx.last_pos, i));
+                    ctx.push_token(Token::new_text(&ctx, ctx.last_pos, i));
                     ctx.last_pos = i;
                 }
                 ctx.head_symbol_stack.push((Symbol::Env, i + 2));
@@ -154,14 +226,14 @@ fn generate_tokens(template_content_bytes: &[u8]) -> Vec<Token> {
                     if !bytes[start_idx..i].contains(&b'=') {
                         panic!("Env symbol missing '=', it should be define like '{{$ key = value $}}'")
                     }
-                    ctx.push_token(Token::Env(start_idx, i));
+                    ctx.push_token(Token::new_env(&ctx, start_idx, i));
                     ctx.last_pos = i + 2;
                 }
                 i += 2;
             }
             (b'{', b'{') => {
                 if ctx.last_pos < i {
-                    ctx.push_token(Token::Text(ctx.last_pos, i));
+                    ctx.push_token(Token::new_text(&ctx, ctx.last_pos, i));
                     ctx.last_pos = i;
                 }
                 ctx.head_symbol_stack.push((Symbol::Placeholder, i + 2));
@@ -171,17 +243,17 @@ fn generate_tokens(template_content_bytes: &[u8]) -> Vec<Token> {
             (b'}', b'}') => {
                 if let Some((Symbol::Placeholder, _)) = ctx.head_symbol_stack.last() {
                     let (_, start_idx) = ctx.head_symbol_stack.pop().unwrap();
-                    ctx.push_token(Token::Placeholder(start_idx, i));
+                    ctx.push_token(Token::new_placeholder(&ctx, start_idx, i));
                     ctx.last_pos = i + 2;
                 }
                 i += 2;
             }
             (b'{', b'#') => {
                 if ctx.last_pos < i {
-                    ctx.push_token(Token::Text(ctx.last_pos, i));
+                    ctx.push_token(Token::new_text(&ctx, ctx.last_pos, i));
                     ctx.last_pos = i;
                 }
-                ctx.now_in_raw_symbol = true;
+                ctx.now_in_raw = true;
                 ctx.head_symbol_stack.push((Symbol::Raw, i + 2));
                 ctx.last_pos += 2;
                 i += 2;
@@ -195,17 +267,17 @@ fn generate_tokens(template_content_bytes: &[u8]) -> Vec<Token> {
             _ => i += 1,
         }
     }
-    ctx.push_token(Token::Text(ctx.last_pos, bytes.len()));
+    ctx.push_token(Token::new_text(&ctx, ctx.last_pos, bytes.len()));
     ctx.tokens
 }
 
 #[derive(Debug)]
-enum Tag<'a> {
-    // for str1 in str2
-    For(&'a str, &'a str),
+enum Tag {
+    /// for [item] in [array]
+    For(String, String),
     EndFor,
-    // if str1 <str2> str3
-    If(&'a str, &'a str, &'a str),
+    /// if [left] [operator] [right]
+    If(String, String, String),
     EndIf,
 }
 
@@ -222,17 +294,17 @@ fn generate_tag(tag_bytes: &[u8]) -> Tag {
                 if tag_slices.len() != 4 || *tag_slices.get(2).unwrap() != "in" {
                     panic!("Illegal expression: for")
                 }
-                let item_name = tag_slices.get(1).unwrap();
-                let collect_name = tag_slices.get(3).unwrap();
+                let item_name = tag_slices.get(1).unwrap().to_string();
+                let collect_name = tag_slices.get(3).unwrap().to_string();
                 Tag::For(item_name, collect_name)
             } else if tag_text.starts_with("if ") {
                 let tag_slices: Vec<&str> = tag_text.splitn(4, ' ').collect();
                 if tag_slices.len() != 4 || *tag_slices.get(2).unwrap() != "==" {
                     panic!("Illegal expression: if")
                 }
-                let exprn_left = tag_slices.get(1).unwrap();
-                let exprn_right = tag_slices.get(3).unwrap();
-                Tag::If(exprn_left, "==", exprn_right)
+                let exprn_left = tag_slices.get(1).unwrap().to_string();
+                let exprn_right = tag_slices.get(3).unwrap().to_string();
+                Tag::If(exprn_left, "==".to_string(), exprn_right)
             } else {
                 panic!("Unsupported tag: {}", tag_text)
             }
@@ -362,9 +434,9 @@ fn fill(template_bytes: &[u8], tokens: &Vec<Token>, data_ctx: &mut AutoDataConte
 
     for token in tokens {
         match token {
-            Token::Tag(tag, sub_tokens) => match tag {
+            Token::Tag(_, ext) => match &ext.tag {
                 Tag::For(item_key, array_key) => {
-                    if let Some(array) = data_ctx.get_array(array_key) {
+                    if let Some(array) = data_ctx.get_array(&array_key) {
                         data_ctx.push_scope();
                         data_ctx.set_scope_with_string("@max", (array.len() - 1).to_string());
                         for i in 0..array.len() {
@@ -372,8 +444,8 @@ fn fill(template_bytes: &[u8], tokens: &Vec<Token>, data_ctx: &mut AutoDataConte
                             if item.is_object() {
                                 data_ctx.push_scope();
                                 data_ctx.set_scope_with_string("@index", i.to_string());
-                                data_ctx.set_scope_with_value(item_key, item.clone());
-                                let replaced = fill(template_bytes, sub_tokens, data_ctx);
+                                data_ctx.set_scope_with_value(&item_key, item.clone());
+                                let replaced = fill(template_bytes, &ext.sub_tokens, data_ctx);
                                 filled.push_str(&replaced);
                                 data_ctx.pop_scope();
                             }
@@ -381,12 +453,12 @@ fn fill(template_bytes: &[u8], tokens: &Vec<Token>, data_ctx: &mut AutoDataConte
                         data_ctx.pop_scope();
                     }
                 }
-                Tag::If(left, operator, right) => match *operator {
+                Tag::If(left, operator, right) => match operator.as_str() {
                     "==" => {
-                        let left = get_variable_in_tag(&data_ctx, *left);
-                        let right = get_variable_in_tag(&data_ctx, *right);
+                        let left = get_variable_in_tag(&data_ctx, &left);
+                        let right = get_variable_in_tag(&data_ctx, &right);
                         if left.is_some() && right.is_some() && left.unwrap() == right.unwrap() {
-                            let replaced = fill(template_bytes, sub_tokens, data_ctx);
+                            let replaced = fill(template_bytes, &ext.sub_tokens, data_ctx);
                             filled.push_str(&replaced);
                         }
                     }
@@ -394,13 +466,13 @@ fn fill(template_bytes: &[u8], tokens: &Vec<Token>, data_ctx: &mut AutoDataConte
                 },
                 _ => panic!("An impossible error when parse tag token"),
             },
-            Token::Env(start, end) => {
+            Token::Env(TokenContext { start, end, .. }) => {
                 let (k, v) = bytes_to_str(template_bytes, *start, *end)
                     .split_once("=")
                     .unwrap();
                 data_ctx.set_scope_with_string(k, v.to_owned());
             }
-            Token::Placeholder(start, end) => {
+            Token::Placeholder(TokenContext { start, end, .. }) => {
                 let placeholder = bytes_to_str(template_bytes, *start, *end);
                 let replaced = match data_ctx.get_string(placeholder) {
                     Some(v) => v,
@@ -408,8 +480,8 @@ fn fill(template_bytes: &[u8], tokens: &Vec<Token>, data_ctx: &mut AutoDataConte
                 };
                 filled.push_str(&replaced);
             }
-            Token::Text(start, end) => {
-                filled.push_str(bytes_to_str(template_bytes, *start, *end));
+            Token::Text(token_ctx) => {
+                filled.push_str(bytes_to_str(template_bytes, token_ctx.start, token_ctx.end));
             }
         }
     }

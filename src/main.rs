@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::{fs, path::Path, time::Instant};
 
 use clap::Parser;
 use cli::{Cli, Command};
@@ -71,7 +71,18 @@ fn fill(
         // fill template
         let template_path = Path::new(&template.path_string);
         let template_content = fs::read_to_string(&template_path).expect("Read template fail");
-        let filled = fill::fill_template(template_content, &data);
+        let filled = if cfg!(debug_assertions) {
+            let start = Instant::now();
+            let filled = fill::fill_template(template_content, &data);
+            let elapsed = start.elapsed();
+            println!("[debug] fill::fill_template time elapsed is {:?}", elapsed);
+            if elapsed.as_millis() >= 10 {
+                panic!("The execution time of fill::fill_template has exceeded the 10ms performance threshold")
+            }
+            filled
+        } else {
+            fill::fill_template(template_content, &data)
+        };
 
         // export or print result
         if let Some(export_path_string) = template.export_path_string {
