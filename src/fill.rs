@@ -33,8 +33,8 @@ enum Token {
 struct TokenContext {
     start: usize,
     end: usize,
-    in_tag: bool,
-    first_in_row: Option<bool>,
+    in_tag: bool,               // TODO tag标签内无效空白字符的去除
+    first_in_row: Option<bool>, // TODO tag内内容缩进控制
     indent: Option<String>,
 }
 
@@ -258,12 +258,16 @@ fn generate_tokens(template_content_bytes: &[u8]) -> Vec<Token> {
                 ctx.last_pos += 2;
                 i += 2;
             }
-            // (b'\r', b'\n') => {
-            //     continue; // TODO
-            // }
-            // (b'\n', _) => {
-            //     continue; // TODO
-            // }
+            (b'\r', b'\n') => {
+                ctx.push_token(Token::new_text(&ctx, ctx.last_pos, i + 2));
+                ctx.last_pos = i + 2;
+                i += 2;
+            }
+            (b'\n', _) => {
+                ctx.push_token(Token::new_text(&ctx, ctx.last_pos, i + 1));
+                ctx.last_pos = i + 1;
+                i += 1;
+            }
             _ => i += 1,
         }
     }
