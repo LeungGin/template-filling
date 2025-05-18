@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, rc::Rc, str};
+use std::{cell::RefCell, collections::HashMap, mem, rc::Rc, str};
 
 use chrono::Local;
 use serde_json::{json, Value};
@@ -33,9 +33,14 @@ enum Token {
 struct TokenContext {
     start: usize,
     end: usize,
-    in_tag: bool,               // TODO tag标签内无效空白字符的去除
-    first_in_row: Option<bool>, // TODO tag内内容缩进控制
-    indent: Option<String>,
+    /// Determine by checking the 'tag_token_stack' in GenerateTokensContext, false if empty
+    in_tag: bool,
+    first_in_row: Option<bool>,
+    /// Vec<(indent_index_start, indent_index_end)>
+    indent: Option<Vec<(usize, usize)>>,
+    // TODO 不光是text_token，所有的token在tag内都应按照缩进逻辑赋值缩进信息
+    // TODO tag_token前的缩进未记到tag_token的缩进信息中（后续当tag内token使用tag_token的缩进量作为基础缩进量时会用到）
+    // TODO tag内内容缩进控制（设计3种缩进类型：indent_base = inherit/tag/raw）
 }
 
 #[derive(Debug)]
@@ -93,21 +98,69 @@ impl Token {
 }
 
 struct GenerateTokensContext {
+    pub last_pos: usize,
     pub tokens: Vec<Token>,
+
+    pub now_in_raw: bool,
+    pub now_has_first_non_blank: bool,
+    /// Index start and end of indent text.
+    /// There may be multiple separated whitespace characters,
+    /// for example (The * symbol stands for whitespace characters),
+    /// ```
+    /// *******<$ custom_env = 123 $>***
+    /// ```
+    pub indent_in_row: Vec<(usize, usize)>,
+
     pub head_symbol_stack: Vec<(Symbol, usize)>,
     pub tag_token_stack: Vec<Token>,
-    pub now_in_raw: bool,
-    pub last_pos: usize,
 }
 
 impl<'a> GenerateTokensContext {
     fn new() -> Self {
         Self {
+            last_pos: 0,
             tokens: Vec::new(),
+            now_in_raw: false,
+            now_has_first_non_blank: false,
+            indent_in_row: Vec::new(),
             head_symbol_stack: Vec::with_capacity(1),
             tag_token_stack: Vec::new(),
-            now_in_raw: false,
-            last_pos: 0,
+        }
+    }
+
+    /// When row is break, should run this function to reset status
+    pub fn reset_row_status(&mut self) {
+        self.now_has_first_non_blank = false;
+        self.indent_in_row.clear();
+    }
+
+    pub fn push_text_token(&mut self, mut token: Token, template_bytes: &[u8]) {
+        if !self.now_in_tag() || self.now_has_first_non_blank {
+            self.push_token(token);
+            return;
+        }
+        if let Token::Text(ref mut token_ctx) = &mut token {
+            let start = token_ctx.start;
+            let end = token_ctx.end;
+            let text = bytes_to_str(template_bytes, start, end);
+            let non_blank_text = text
+                .find(|c: char| !c.is_whitespace())
+                .map(|pos| &text[pos..]);
+            if let Some(non_blank_text) = non_blank_text {
+                self.now_has_first_non_blank = true;
+                let non_blank_len = non_blank_text.len();
+                if non_blank_len < text.len() {
+                    self.indent_in_row
+                        .push((start, start + (text.len() - non_blank_len)));
+                }
+                token_ctx.in_tag = true;
+                token_ctx.first_in_row = Some(true);
+                token_ctx.indent = Some(mem::replace(&mut self.indent_in_row, Vec::new()));
+                token_ctx.start = end - non_blank_len;
+                self.push_token(token);
+            } else {
+                self.indent_in_row.push((start, end));
+            }
         }
     }
 
@@ -130,10 +183,10 @@ impl<'a> GenerateTokensContext {
     }
 }
 
-fn generate_tokens(template_content_bytes: &[u8]) -> Vec<Token> {
+fn generate_tokens(template_bytes: &[u8]) -> Vec<Token> {
     let mut ctx = GenerateTokensContext::new();
 
-    let bytes = template_content_bytes;
+    let bytes = template_bytes;
     let mut i = 0;
     let len = bytes.len().saturating_sub(1);
     while i < len {
@@ -142,7 +195,7 @@ fn generate_tokens(template_content_bytes: &[u8]) -> Vec<Token> {
             if bytes[i] == b'#' && bytes[i + 1] == b'}' {
                 if let Some((Symbol::Raw, _)) = ctx.head_symbol_stack.last() {
                     let (_, start_idx) = ctx.head_symbol_stack.pop().unwrap();
-                    ctx.push_token(Token::new_text(&ctx, start_idx, i));
+                    ctx.push_text_token(Token::new_text(&ctx, start_idx, i), template_bytes);
                     ctx.last_pos = i + 2;
                 }
                 i += 2;
@@ -157,7 +210,7 @@ fn generate_tokens(template_content_bytes: &[u8]) -> Vec<Token> {
         match (&bytes[i], &bytes[i + 1]) {
             (b'{', b'%') => {
                 if ctx.last_pos < i {
-                    ctx.push_token(Token::new_text(&ctx, ctx.last_pos, i));
+                    ctx.push_text_token(Token::new_text(&ctx, ctx.last_pos, i), template_bytes);
                     ctx.last_pos = i;
                 }
                 ctx.head_symbol_stack.push((Symbol::Logical, i + 2));
@@ -213,7 +266,7 @@ fn generate_tokens(template_content_bytes: &[u8]) -> Vec<Token> {
             }
             (b'{', b'$') => {
                 if ctx.last_pos < i {
-                    ctx.push_token(Token::new_text(&ctx, ctx.last_pos, i));
+                    ctx.push_text_token(Token::new_text(&ctx, ctx.last_pos, i), template_bytes);
                     ctx.last_pos = i;
                 }
                 ctx.head_symbol_stack.push((Symbol::Env, i + 2));
@@ -233,7 +286,7 @@ fn generate_tokens(template_content_bytes: &[u8]) -> Vec<Token> {
             }
             (b'{', b'{') => {
                 if ctx.last_pos < i {
-                    ctx.push_token(Token::new_text(&ctx, ctx.last_pos, i));
+                    ctx.push_text_token(Token::new_text(&ctx, ctx.last_pos, i), template_bytes);
                     ctx.last_pos = i;
                 }
                 ctx.head_symbol_stack.push((Symbol::Placeholder, i + 2));
@@ -250,7 +303,7 @@ fn generate_tokens(template_content_bytes: &[u8]) -> Vec<Token> {
             }
             (b'{', b'#') => {
                 if ctx.last_pos < i {
-                    ctx.push_token(Token::new_text(&ctx, ctx.last_pos, i));
+                    ctx.push_text_token(Token::new_text(&ctx, ctx.last_pos, i), template_bytes);
                     ctx.last_pos = i;
                 }
                 ctx.now_in_raw = true;
@@ -259,19 +312,24 @@ fn generate_tokens(template_content_bytes: &[u8]) -> Vec<Token> {
                 i += 2;
             }
             (b'\r', b'\n') => {
-                ctx.push_token(Token::new_text(&ctx, ctx.last_pos, i + 2));
+                ctx.push_text_token(Token::new_text(&ctx, ctx.last_pos, i + 2), template_bytes);
                 ctx.last_pos = i + 2;
+                ctx.reset_row_status();
                 i += 2;
             }
             (b'\n', _) => {
-                ctx.push_token(Token::new_text(&ctx, ctx.last_pos, i + 1));
+                ctx.push_text_token(Token::new_text(&ctx, ctx.last_pos, i + 1), template_bytes);
                 ctx.last_pos = i + 1;
+                ctx.reset_row_status();
                 i += 1;
             }
             _ => i += 1,
         }
     }
-    ctx.push_token(Token::new_text(&ctx, ctx.last_pos, bytes.len()));
+    ctx.push_text_token(
+        Token::new_text(&ctx, ctx.last_pos, bytes.len()),
+        template_bytes,
+    );
     ctx.tokens
 }
 
