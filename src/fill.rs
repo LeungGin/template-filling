@@ -38,7 +38,6 @@ struct TokenContext {
     first_in_row: Option<bool>,
     /// Vec<(indent_index_start, indent_index_end)>
     indent: Option<Vec<(usize, usize)>>,
-    // TODO 不光是text_token，所有的token在tag内都应按照缩进逻辑赋值缩进信息
     // TODO tag_token前的缩进未记到tag_token的缩进信息中（后续当tag内token使用tag_token的缩进量作为基础缩进量时会用到）
     // TODO tag内内容缩进控制（设计3种缩进类型：indent_base = inherit/tag/raw）
 }
@@ -136,7 +135,7 @@ impl<'a> GenerateTokensContext {
 
     pub fn push_text_token(&mut self, mut token: Token, template_bytes: &[u8]) {
         if !self.now_in_tag() || self.now_has_first_non_blank {
-            self.push_token(token);
+            self.push_token_0(token);
             return;
         }
         if let Token::Text(ref mut token_ctx) = &mut token {
@@ -157,14 +156,41 @@ impl<'a> GenerateTokensContext {
                 token_ctx.first_in_row = Some(true);
                 token_ctx.indent = Some(mem::replace(&mut self.indent_in_row, Vec::new()));
                 token_ctx.start = end - non_blank_len;
-                self.push_token(token);
+                self.push_token_0(token);
             } else {
                 self.indent_in_row.push((start, end));
             }
         }
     }
 
-    pub fn push_token(&mut self, token: Token) {
+    pub fn push_token(&mut self, mut token: Token) {
+        if let Token::Tag(token_ctx, _) = &mut token {
+            if !self.now_has_first_non_blank {
+                self.now_has_first_non_blank = true;
+                token_ctx.in_tag = false;
+                token_ctx.first_in_row = Some(true);
+                token_ctx.indent = Some(mem::replace(&mut self.indent_in_row, Vec::new()));
+                self.push_token_0(token);
+                return; // TODO 为了逻辑统一，最好全部行的第一个非空token都挂indent
+            }
+        }
+        if !self.now_in_tag() || self.now_has_first_non_blank {
+            self.push_token_0(token);
+            return;
+        }
+        match &mut token {
+            Token::Text(_) => panic!("Text token should run 'push_text_token' function to push"),
+            Token::Placeholder(token_ctx) | Token::Env(token_ctx) | Token::Tag(token_ctx, _) => {
+                self.now_has_first_non_blank = true;
+                token_ctx.in_tag = true;
+                token_ctx.first_in_row = Some(true);
+                token_ctx.indent = Some(mem::replace(&mut self.indent_in_row, Vec::new()));
+                self.push_token_0(token);
+            }
+        }
+    }
+
+    fn push_token_0(&mut self, token: Token) {
         if self.tag_token_stack.is_empty() {
             self.tokens.push(token);
         } else {
