@@ -15,11 +15,11 @@ CREATE TABLE {{table.name}} (
     last_name VARCHAR(50) NOT NULL,
     -- Default indent_base is 'inherit', here is 'tag' because of global env define is 'tag'
     {% for field in custom_fields %}
-      {$ join_with = \n $}
+      {$ join_with = \n $}-- After 'env' Token
       -- @index is {{@index}}, @max is {{@max}}
       {{field.name}} {{field.type}}, -- {{field.comment}}
       {% if @index == @max %}-- ending text demo: last index is {{@index}}, max is {{@max}}{% endif %}
-    {% endfor %}
+    {% endfor %}-- Text after Tag 'for', use to test token context attribute 'end_of_raw'
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
