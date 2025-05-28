@@ -58,6 +58,7 @@ struct TokenContext {
     // TODO [T2] 将Token::Env独立成专门的struct，因为其与其他Token基本无公用属性
     // TODO [T2] Tag 'If' Support single bool
     // TOOD [T2] Tag 'If' Support multiple bool
+    // TODO [T2] Token support multiple row define
 }
 
 #[derive(Debug)]
@@ -494,8 +495,9 @@ fn generate_tag(tag_bytes: &[u8]) -> Tag {
         "endfor" => Tag::EndFor,
         "endif" => Tag::EndIf,
         _ => {
+            let tag_text = normalize_spaces(tag_text);
             if tag_text.starts_with("for ") {
-                let tag_slices: Vec<&str> = tag_text.splitn(4, ' ').collect(); // TODO maybe like it will wrong: 'for  n in    arrays'
+                let tag_slices: Vec<&str> = tag_text.splitn(4, ' ').collect();
                 if tag_slices.len() != 4 || *tag_slices.get(2).unwrap() != "in" {
                     panic!("Illegal expression: for")
                 }
@@ -503,7 +505,7 @@ fn generate_tag(tag_bytes: &[u8]) -> Tag {
                 let collect_name = tag_slices.get(3).unwrap().to_string();
                 Tag::For(item_name, collect_name)
             } else if tag_text.starts_with("if ") {
-                let tag_slices: Vec<&str> = tag_text.splitn(4, ' ').collect(); // TODO maybe like it will wrong: 'if  a ==      b'
+                let tag_slices: Vec<&str> = tag_text.splitn(4, ' ').collect();
                 if tag_slices.len() != 4 || *tag_slices.get(2).unwrap() != "==" {
                     panic!("Illegal expression: if")
                 }
@@ -801,4 +803,21 @@ fn get_kv_from_env_token(template_bytes: &[u8], start: usize, end: usize) -> (&s
         .split_once("=")
         .unwrap();
     (k.trim(), v.trim())
+}
+
+fn normalize_spaces(text: &str) -> String {
+    let mut result = String::new();
+    let mut last_was_whitespace = false;
+    for ch in text.chars() {
+        if ch.is_whitespace() {
+            if !last_was_whitespace {
+                result.push(' ');
+                last_was_whitespace = true;
+            }
+        } else {
+            result.push(ch);
+            last_was_whitespace = false;
+        }
+    }
+    result.trim().to_string()
 }
