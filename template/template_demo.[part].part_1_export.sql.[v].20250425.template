@@ -1,7 +1,7 @@
 -- The defaut value of indent_base is tag
 {$ indent_base = tag $}
 
--- The kind of Symbol has: {#{%..%} {$..$} {{..}} {#..#}#}
+-- The kind of Symbol has: {#{%..%} {$..$} {{..}} {#..#}#}, and it only a Raw Token demo
 
 /*
 Create by {{author}}
@@ -10,6 +10,11 @@ Create in {{@now}}
 
 -- Table {{table.name}}
 CREATE TABLE {{table.name}} (
+    {% if 1 == 1 %}
+      {$ indent_base = raw $}
+-- This is indent_base=raw demo 1: no indent
+    -- This is indent_base=raw demo 2: 4 space indent
+    {% endif %}
     id SERIAL PRIMARY KEY,
     first_name VARCHAR(50) NOT NULL,
     last_name VARCHAR(50) NOT NULL,
@@ -18,7 +23,9 @@ CREATE TABLE {{table.name}} (
       {$ join_with = \n $}-- After 'env' Token
       -- @index is {{@index}}, @max is {{@max}}
       {{field.name}} {{field.type}}, -- {{field.comment}}
-      {% if @index == @max %}-- ending text demo: last index is {{@index}}, max is {{@max}}{% endif %}
+      {% if @index == @max %}
+        -- ending text demo: last index is {{@index}}, max is {{@max}}
+      {% endif %}
     {% endfor %}-- Text after Tag 'for', use to test token context attribute 'end_of_raw'
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
