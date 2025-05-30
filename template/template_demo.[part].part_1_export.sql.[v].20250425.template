@@ -19,8 +19,7 @@ CREATE TABLE {{table.name}} (
     first_name VARCHAR(50) NOT NULL,
     last_name VARCHAR(50) NOT NULL,
     -- Default indent_base is 'inherit', here is 'tag' because of global env define is 'tag'
-    {% for field 
-        in custom_fields %}
+    {% for field in custom_fields %}
       {$ join_with = \n $}-- After 'env' Token
       -- @index is {{@index}}, @max is {{@max}}
       {{field.name}} {{field.type}}, -- {{field.comment}}

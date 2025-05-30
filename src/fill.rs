@@ -46,19 +46,19 @@ struct TokenContext {
     is_indent: bool,
     /// Vec<(indent_index_start, indent_index_end)>
     indent: Option<Vec<(usize, usize)>>,
-    // TODO [T0] 当有多层tag嵌套时，未正确缩进（经排查，是因为当text和标签在同一行时，判断text不是first_in_row（因为当前tag也算入计数），所以未为其添加缩进）
-    // TODO [T0] 生成token时，tag token内记录最小缩进字符长度
-    // TODO [T0] tag token内token仅当为第一个子token或者为当前所在行的第一个token时，执行缩进填充逻辑
-    // TODO [T0] tag token内token填充缩进时，若所在tag token的indent_base=tag，则缩进值=当前token的原始缩进值-当前token所在tag token的所有子token的最小缩进值+当前token所在tag token的缩进值；若所在tag token的indent_base=raw，则缩进值=token原始缩进值
-    // TODO [T0] indent_base可选值为inherit、tag、raw。模版根下所有text、placeholder默认为raw，所有tag默认为tag；tag token内所有token默认为inherit；env token全局默认为hidden token，不执行缩进填充
-    // TODO [T1] 冗余代码重构
-    // TODO [T1] 无用换行问题
-    // TODO [T2] 改为每行都记录indent后,first_in_row没必要是Option类型了
-    // TODO [T2] tag类token没有记录start和end，默认应该记录head的start和end，然后可以考虑添加属性记录tail的start和end
-    // TODO [T2] 将Token::Env独立成专门的struct，因为其与其他Token基本无公用属性
-    // TODO [T2] Tag 'If' Support single bool
-    // TOOD [T2] Tag 'If' Support multiple bool
-    // TODO [T2] Token support multiple row define
+    // TODO [T0] [ ] 当有多层tag嵌套时，未正确缩进（经排查，是因为当text和标签在同一行时，判断text不是first_in_row（因为当前tag也算入计数），所以未为其添加缩进）
+    // TODO [T0] [v] 生成token时，tag token内记录最小缩进字符长度
+    // TODO [T0] [ ] tag token内token仅当为第一个子token或者为当前所在行的第一个token时，执行缩进填充逻辑
+    // TODO [T0] [ ] tag token内token填充缩进时，若所在tag token的indent_base=tag，则缩进值=当前token的原始缩进值-当前token所在tag token的所有子token的最小缩进值+当前token所在tag token的缩进值；若所在tag token的indent_base=raw，则缩进值=token原始缩进值
+    // TODO [T0] [ ] indent_base可选值为inherit、tag、raw。模版根下所有text、placeholder默认为raw，所有tag默认为tag；tag token内所有token默认为inherit；env token全局默认为hidden token，不执行缩进填充
+    // TODO [T1] [ ] 冗余代码重构
+    // TODO [T1] [ ] 无用换行问题
+    // TODO [T2] [ ] 改为每行都记录indent后,first_in_row没必要是Option类型了
+    // TODO [T2] [ ] tag类token没有记录start和end，默认应该记录head的start和end，然后可以考虑添加属性记录tail的start和end
+    // TODO [T2] [ ] 将Token::Env独立成专门的struct，因为其与其他Token基本无公用属性
+    // TODO [T2] [ ] Tag 'If' Support single bool
+    // TOOD [T2] [ ] Tag 'If' Support multiple bool
+    // TODO [T2] [ ] Token support multiple row define
 }
 
 #[derive(Debug)]
@@ -66,6 +66,7 @@ struct TagExtend {
     tag: Tag,
     custom_env: Vec<Token>, // Just Token::Env
     sub_tokens: Vec<Token>, // Not include Token::Env
+    sub_token_min_indent_len: Option<usize>,
 }
 
 impl Token {
@@ -138,6 +139,7 @@ impl Token {
                 tag,
                 custom_env: Vec::new(),
                 sub_tokens: Vec::new(),
+                sub_token_min_indent_len: None,
             },
         );
         ctx.filter_and_update_token_attribute(token, template_bytes)
@@ -279,9 +281,42 @@ impl<'a> GenerateTokensContext {
             }
         }
         if self.now_in_tag() {
-            if let Token::Tag(_, TagExtend { sub_tokens, .. }) =
-                self.tag_token_stack.last_mut().unwrap()
+            if let Token::Tag(
+                _,
+                TagExtend {
+                    sub_tokens,
+                    sub_token_min_indent_len,
+                    ..
+                },
+            ) = self.tag_token_stack.last_mut().unwrap()
             {
+                // log down the min indent len
+                match &token {
+                    Token::Placeholder(token_ctx)
+                    | Token::Text(token_ctx)
+                    | Token::Tag(token_ctx, ..) => {
+                        if token_ctx.first_in_row.is_some() && token_ctx.first_in_row.unwrap() {
+                            let token_indent_len =
+                                token_ctx.indent.as_ref().map_or(0, |indent_entries| {
+                                    let mut len = 0;
+                                    for (start, end) in indent_entries {
+                                        len += end - start;
+                                    }
+                                    len
+                                });
+                            println!("token_indent_len={}", token_indent_len);
+                            if let Some(min_len) = sub_token_min_indent_len {
+                                if token_indent_len < *min_len {
+                                    *sub_token_min_indent_len = Some(token_indent_len);
+                                }
+                            } else {
+                                *sub_token_min_indent_len = Some(token_indent_len);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                // log down sub token
                 sub_tokens.push(token);
             } else {
                 panic!("An impossible error when push token")
