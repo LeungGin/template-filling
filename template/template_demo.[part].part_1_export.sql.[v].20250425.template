@@ -23,10 +23,10 @@ CREATE TABLE {{table.name}} (
       {$ join_with = \n $}-- After 'env' Token
       -- @index is {{@index}}, @max is {{@max}}
       {{field.name}} {{field.type}}, -- {{field.comment}}
-      {% if   @index ==      @max %}
+      {% if   @index ==      @max %}-- [TestCase] first item in tag, should be fill the indent
         -- ending text demo: last index is {{@index}}, max is {{@max}}
       {% endif %}
-    {% endfor %}-- Text after Tag 'for', use to test token context attribute 'end_of_raw'
+    {% endfor %}-- Text after Tag 'for', use to test token context attribute 'end_of_row'
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );

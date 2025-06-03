@@ -41,14 +41,14 @@ struct TokenContext {
     /// Determine by checking the 'tag_token_stack' in GenerateTokensContext, false if empty
     in_tag: bool,
     first_in_row: Option<bool>,
-    end_of_raw: bool,
+    end_of_row: bool,
     /// Which is the indent in row
     is_indent: bool,
     /// Vec<(indent_index_start, indent_index_end)>
     indent: Option<Vec<(usize, usize)>>,
     // TODO [T0] [ ] 当有多层tag嵌套时，未正确缩进（经排查，是因为当text和标签在同一行时，判断text不是first_in_row（因为当前tag也算入计数），所以未为其添加缩进）
     // TODO [T0] [v] 生成token时，tag token内记录最小缩进字符长度
-    // TODO [T0] [ ] tag token内token仅当为第一个子token或者为当前所在行的第一个token时，执行缩进填充逻辑
+    // TODO [T0] [v] tag token内token仅当为第一个子token或者为当前所在行的第一个token时，执行缩进填充逻辑
     // TODO [T0] [ ] tag token内token填充缩进时，若所在tag token的indent_base=tag，则缩进值=当前token的原始缩进值-当前token所在tag token的所有子token的最小缩进值+当前token所在tag token的缩进值；若所在tag token的indent_base=raw，则缩进值=token原始缩进值
     // TODO [T0] [ ] indent_base可选值为inherit、tag、raw。模版根下所有text、placeholder默认为raw，所有tag默认为tag；tag token内所有token默认为inherit；env token全局默认为hidden token，不执行缩进填充
     // TODO [T1] [ ] 冗余代码重构
@@ -81,7 +81,7 @@ impl Token {
             end,
             in_tag: ctx.now_in_tag(),
             first_in_row: None,
-            end_of_raw: false,
+            end_of_row: false,
             is_indent: false,
             indent: None,
         });
@@ -99,7 +99,7 @@ impl Token {
             end,
             in_tag: ctx.now_in_tag(),
             first_in_row: None,
-            end_of_raw: false,
+            end_of_row: false,
             is_indent: false,
             indent: None,
         });
@@ -117,7 +117,7 @@ impl Token {
             end,
             in_tag: ctx.now_in_tag(),
             first_in_row: None,
-            end_of_raw: false,
+            end_of_row: false,
             is_indent: false,
             indent: None,
         });
@@ -131,7 +131,7 @@ impl Token {
                 end: 0,
                 in_tag: ctx.now_in_tag(),
                 first_in_row: None,
-                end_of_raw: false,
+                end_of_row: false,
                 is_indent: false,
                 indent: None,
             },
@@ -203,14 +203,14 @@ impl<'a> GenerateTokensContext {
                             | Token::Placeholder(last_token_ctx)
                             | Token::Tag(last_token_ctx, _) = last_token
                             {
-                                last_token_ctx.end_of_raw = true;
+                                last_token_ctx.end_of_row = true;
                             }
                         }
                     }
                     // text is 'text + break symbol'
                     else {
                         // Mark the current text token as the last one
-                        token_ctx.end_of_raw = true;
+                        token_ctx.end_of_row = true;
                     }
                 }
                 // General text
@@ -304,7 +304,6 @@ impl<'a> GenerateTokensContext {
                                     }
                                     len
                                 });
-                            println!("token_indent_len={}", token_indent_len);
                             if let Some(min_len) = sub_token_min_indent_len {
                                 if token_indent_len < *min_len {
                                     *sub_token_min_indent_len = Some(token_indent_len);
@@ -389,8 +388,8 @@ fn generate_tokens(template_bytes: &[u8]) -> (Vec<Token>, Vec<Token>) {
                                             if let Token::Tag(end_token_ctx, ..) =
                                                 Token::new_tag(template_bytes, &mut ctx, tag)
                                             {
-                                                head_token_ctx.end_of_raw =
-                                                    end_token_ctx.end_of_raw;
+                                                head_token_ctx.end_of_row =
+                                                    end_token_ctx.end_of_row;
                                                 ctx.push_token(head_tag_token);
                                             }
                                         }
@@ -415,8 +414,8 @@ fn generate_tokens(template_bytes: &[u8]) -> (Vec<Token>, Vec<Token>) {
                                             if let Token::Tag(end_token_ctx, ..) =
                                                 Token::new_tag(template_bytes, &mut ctx, tag)
                                             {
-                                                head_token_ctx.end_of_raw =
-                                                    end_token_ctx.end_of_raw;
+                                                head_token_ctx.end_of_row =
+                                                    end_token_ctx.end_of_row;
                                                 ctx.push_token(head_tag_token);
                                             }
                                         }
@@ -686,71 +685,81 @@ fn fill(
 
     let mut filled = String::new();
 
-    for token in tokens {
+    for (index, token) in tokens.iter().enumerate() {
         let indent = match token {
             Token::Placeholder(token_ctx) | Token::Text(token_ctx) => {
-                if token_ctx.first_in_row.is_none() || !token_ctx.first_in_row.unwrap() {
-                    None
-                } else if token_ctx.in_tag {
-                    let indent_base = data_ctx
-                        .get_string("indent_base")
-                        .unwrap_or_else(|| String::from("tag"));
-                    match indent_base.as_str() {
-                        "raw" => {
-                            if let Some(indents) = &token_ctx.indent {
-                                let mut indent = String::new();
-                                for (start, end) in indents {
-                                    indent.push_str(bytes_to_str(template_bytes, *start, *end));
+                // First in row or first item in tag will be fill indent
+                if token_ctx.first_in_row.is_some() && token_ctx.first_in_row.unwrap()
+                    || token_ctx.first_in_row.is_none() && token_ctx.in_tag && index == 0
+                {
+                    if token_ctx.in_tag {
+                        let indent_base = data_ctx
+                            .get_string("indent_base")
+                            .unwrap_or_else(|| String::from("tag"));
+                        match indent_base.as_str() {
+                            "raw" => {
+                                if let Some(indents) = &token_ctx.indent {
+                                    let mut indent = String::new();
+                                    for (start, end) in indents {
+                                        indent.push_str(bytes_to_str(template_bytes, *start, *end));
+                                    }
+                                    Some(indent)
+                                } else {
+                                    None
                                 }
-                                Some(indent)
-                            } else {
-                                None
+                            }
+                            _ => {
+                                // indent_base = tag
+                                data_ctx.get_string("tag_indent")
                             }
                         }
-                        _ => {
-                            // indent_base = tag
-                            data_ctx.get_string("tag_indent")
+                    } else {
+                        if let Some(indents) = &token_ctx.indent {
+                            let mut indent = String::new();
+                            for (start, end) in indents {
+                                indent.push_str(bytes_to_str(template_bytes, *start, *end));
+                            }
+                            Some(indent)
+                        } else {
+                            None
                         }
                     }
                 } else {
-                    if let Some(indents) = &token_ctx.indent {
-                        let mut indent = String::new();
-                        for (start, end) in indents {
-                            indent.push_str(bytes_to_str(template_bytes, *start, *end));
-                        }
-                        Some(indent)
-                    } else {
-                        None
-                    }
+                    None
                 }
             }
             Token::Tag(token_ctx, _) => {
-                if token_ctx.first_in_row.is_none() || !token_ctx.first_in_row.unwrap() {
-                    None
-                } else if token_ctx.in_tag {
-                    if let Some(indents) = &token_ctx.indent {
-                        let mut indent = String::new();
-                        for (start, end) in indents {
-                            indent.push_str(bytes_to_str(template_bytes, *start, *end));
+                // First in row or first item in tag will be fill indent
+                if token_ctx.first_in_row.is_some() && token_ctx.first_in_row.unwrap()
+                    || token_ctx.first_in_row.is_none() && token_ctx.in_tag && index == 0
+                {
+                    if token_ctx.in_tag {
+                        if let Some(indents) = &token_ctx.indent {
+                            let mut indent = String::new();
+                            for (start, end) in indents {
+                                indent.push_str(bytes_to_str(template_bytes, *start, *end));
+                            }
+                            if let Some(parent_tag_indent) = data_ctx.get_string("tag_indent") {
+                                indent = parent_tag_indent + &indent;
+                            }
+                            if !indent.is_empty() {
+                                data_ctx.set_scope_with_string("tag_indent", indent);
+                            }
                         }
-                        if let Some(parent_tag_indent) = data_ctx.get_string("tag_indent") {
-                            indent = parent_tag_indent + &indent;
+                        None
+                    } else {
+                        if let Some(indents) = &token_ctx.indent {
+                            let mut indent = String::new();
+                            for (start, end) in indents {
+                                indent.push_str(bytes_to_str(template_bytes, *start, *end));
+                            }
+                            if !indent.is_empty() {
+                                data_ctx.set_scope_with_string("tag_indent", indent);
+                            }
                         }
-                        if !indent.is_empty() {
-                            data_ctx.set_scope_with_string("tag_indent", indent);
-                        }
+                        None
                     }
-                    None
                 } else {
-                    if let Some(indents) = &token_ctx.indent {
-                        let mut indent = String::new();
-                        for (start, end) in indents {
-                            indent.push_str(bytes_to_str(template_bytes, *start, *end));
-                        }
-                        if !indent.is_empty() {
-                            data_ctx.set_scope_with_string("tag_indent", indent);
-                        }
-                    }
                     None
                 }
             }
@@ -801,8 +810,10 @@ fn fill(
                         let left = get_variable_in_tag(&data_ctx, &left);
                         let right = get_variable_in_tag(&data_ctx, &right);
                         if left.is_some() && right.is_some() && left.unwrap() == right.unwrap() {
+                            data_ctx.push_scope();
                             let replaced =
                                 fill(template_bytes, &ext.custom_env, &ext.sub_tokens, data_ctx);
+                            data_ctx.pop_scope();
                             filled.push_str(&replaced);
                         }
                     }
