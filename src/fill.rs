@@ -27,12 +27,24 @@ enum Symbol {
 }
 
 #[derive(Debug)]
+struct EnvDefine {
+    start: usize,
+    end: usize,
+}
+
+impl EnvDefine {
+    pub fn new(start: usize, end: usize) -> Self {
+        EnvDefine { start, end }
+    }
+}
+
+#[derive(Debug)]
 struct TokenContext {
     start: usize,
     end: usize,
     /// Determine by checking the 'tag_token_stack' in GenerateTokensContext, false if empty
     in_tag: bool,
-    first_in_row: Option<bool>,
+    first_in_row: bool,
     end_of_row: bool,
     /// Which is the indent in row
     is_indent: bool,
@@ -40,9 +52,7 @@ struct TokenContext {
     indent: Option<Vec<(usize, usize)>>,
     // TODO [T1] [ ] 冗余代码重构
     // TODO [T1] [ ] 无用换行问题
-    // TODO [T2] [ ] 改为每行都记录indent后,first_in_row没必要是Option类型了
     // TODO [T2] [ ] tag类token没有记录start和end，默认应该记录head的start和end，然后可以考虑添加属性记录tail的start和end
-    // TODO [T2] [ ] 将Token::Env独立成专门的struct，因为其与其他Token基本无公用属性
     // TODO [T2] [ ] Tag 'If' Support single bool
     // TOOD [T2] [ ] Tag 'If' Support multiple bool
     // TODO [T2] [ ] Token support multiple row define
@@ -65,8 +75,8 @@ impl TokenContext {
 #[derive(Debug)]
 struct TagExtend {
     tag: Tag,
-    custom_env: Vec<Token>, // Just Token::Env
-    sub_tokens: Vec<Token>, // Not include Token::Env
+    custom_env: Vec<EnvDefine>, // Just Token::Env
+    sub_tokens: Vec<Token>,     // Not include Token::Env
     sub_token_min_indent_len: Option<usize>,
 }
 
@@ -74,7 +84,6 @@ struct TagExtend {
 enum Token {
     Text(TokenContext),
     Placeholder(TokenContext),
-    Env(TokenContext),
     Tag(TokenContext, TagExtend),
 }
 
@@ -89,7 +98,7 @@ impl Token {
             start,
             end,
             in_tag: ctx.now_in_tag(),
-            first_in_row: None,
+            first_in_row: false,
             end_of_row: false,
             is_indent: false,
             indent: None,
@@ -107,25 +116,7 @@ impl Token {
             start,
             end,
             in_tag: ctx.now_in_tag(),
-            first_in_row: None,
-            end_of_row: false,
-            is_indent: false,
-            indent: None,
-        });
-        ctx.filter_and_update_token_attribute(token, template_bytes)
-    }
-
-    pub fn new_env(
-        template_bytes: &[u8],
-        ctx: &mut GenerateTokensContext,
-        start: usize,
-        end: usize,
-    ) -> Token {
-        let token = Token::Env(TokenContext {
-            start,
-            end,
-            in_tag: ctx.now_in_tag(),
-            first_in_row: None,
+            first_in_row: false,
             end_of_row: false,
             is_indent: false,
             indent: None,
@@ -139,7 +130,7 @@ impl Token {
                 start: 0,
                 end: 0,
                 in_tag: ctx.now_in_tag(),
-                first_in_row: None,
+                first_in_row: false,
                 end_of_row: false,
                 is_indent: false,
                 indent: None,
@@ -157,8 +148,8 @@ impl Token {
 
 struct GenerateTokensContext {
     pub last_pos: usize,
-    custom_vars: Vec<Token>, // Just Token::Env
-    tokens: Vec<Token>,      // Not include Token::Env
+    custom_vars: Vec<EnvDefine>,
+    tokens: Vec<Token>,
 
     // <<< Keep coding, time will reward --- 2025/5/22 1:01 >>>
     pub now_in_raw: bool,
@@ -208,12 +199,10 @@ impl<'a> GenerateTokensContext {
                     {
                         // Mark the previous token as the last one
                         if let Some(last_token) = self.tokens.last_mut() {
-                            if let Token::Text(last_token_ctx)
+                            let (Token::Text(last_token_ctx)
                             | Token::Placeholder(last_token_ctx)
-                            | Token::Tag(last_token_ctx, _) = last_token
-                            {
-                                last_token_ctx.end_of_row = true;
-                            }
+                            | Token::Tag(last_token_ctx, _)) = last_token;
+                            last_token_ctx.end_of_row = true;
                         }
                     }
                     // text is 'text + break symbol'
@@ -237,7 +226,7 @@ impl<'a> GenerateTokensContext {
                             self.indent_in_row
                                 .push((start, start + (text.len() - non_blank_len)));
                         }
-                        token_ctx.first_in_row = Some(true);
+                        token_ctx.first_in_row = true;
                         token_ctx.indent = Some(mem::replace(&mut self.indent_in_row, Vec::new()));
                         token_ctx.start = end - non_blank_len;
                     } else {
@@ -250,12 +239,9 @@ impl<'a> GenerateTokensContext {
             Token::Tag(ref mut token_ctx, _) | Token::Placeholder(ref mut token_ctx) => {
                 if !self.now_has_first_non_blank {
                     self.now_has_first_non_blank = true;
-                    token_ctx.first_in_row = Some(true);
+                    token_ctx.first_in_row = true;
                     token_ctx.indent = Some(mem::replace(&mut self.indent_in_row, Vec::new()));
                 }
-            }
-            _ => {
-                // Token::Env no need update
             }
         }
         token
@@ -267,19 +253,17 @@ impl<'a> GenerateTokensContext {
         self.indent_in_row.clear();
     }
 
-    pub fn push_custom_env(&mut self, env_token: Token) {
-        if let Token::Env(_) = env_token {
-            if self.now_in_tag() {
-                if let Token::Tag(_, TagExtend { custom_env, .. }) =
-                    self.tag_token_stack.last_mut().unwrap()
-                {
-                    custom_env.push(env_token);
-                } else {
-                    panic!("An impossible error when push token")
-                }
+    pub fn push_custom_env(&mut self, env: EnvDefine) {
+        if self.now_in_tag() {
+            if let Token::Tag(_, TagExtend { custom_env, .. }) =
+                self.tag_token_stack.last_mut().unwrap()
+            {
+                custom_env.push(env);
             } else {
-                self.custom_vars.push(env_token);
+                panic!("An impossible error when push token")
             }
+        } else {
+            self.custom_vars.push(env);
         }
     }
 
@@ -304,7 +288,7 @@ impl<'a> GenerateTokensContext {
                     Token::Placeholder(token_ctx)
                     | Token::Text(token_ctx)
                     | Token::Tag(token_ctx, ..) => {
-                        if token_ctx.first_in_row.is_some() && token_ctx.first_in_row.unwrap() {
+                        if token_ctx.first_in_row {
                             let token_indent_len =
                                 token_ctx.indent.as_ref().map_or(0, |indent_entries| {
                                     let mut len = 0;
@@ -322,7 +306,6 @@ impl<'a> GenerateTokensContext {
                             }
                         }
                     }
-                    _ => {}
                 }
                 // log down sub token
                 sub_tokens.push(token);
@@ -339,7 +322,7 @@ impl<'a> GenerateTokensContext {
     }
 }
 
-fn generate_tokens(template_bytes: &[u8]) -> (Vec<Token>, Vec<Token>) {
+fn generate_tokens(template_bytes: &[u8]) -> (Vec<EnvDefine>, Vec<Token>) {
     let mut ctx = GenerateTokensContext::new();
 
     let bytes = template_bytes;
@@ -457,8 +440,8 @@ fn generate_tokens(template_bytes: &[u8]) -> (Vec<Token>, Vec<Token>) {
                     if !bytes[start_idx..i].contains(&b'=') {
                         panic!("Env symbol missing '=', it should be define like '{{$ key = value $}}'")
                     }
-                    let token = Token::new_env(template_bytes, &mut ctx, start_idx, i);
-                    ctx.push_custom_env(token);
+                    let env = EnvDefine::new(start_idx, i);
+                    ctx.push_custom_env(env);
                     ctx.last_pos = i + 2;
                 }
                 i += 2;
@@ -689,15 +672,13 @@ impl<'a> AutoDataContext<'a> {
 
 fn fill(
     template_bytes: &[u8],
-    custom_envs: &Vec<Token>,
+    custom_envs: &Vec<EnvDefine>,
     tokens: &Vec<Token>,
     data_ctx: &mut AutoDataContext,
 ) -> String {
-    for env_token in custom_envs {
-        if let Token::Env(TokenContext { start, end, .. }) = env_token {
-            let (k, v) = get_kv_from_env_token(template_bytes, *start, *end);
-            data_ctx.set_scope_with_string(k, v.to_owned());
-        }
+    for env in custom_envs {
+        let (k, v) = get_kv_from_env_token(template_bytes, env.start, env.end);
+        data_ctx.set_scope_with_string(k, v.to_owned());
     }
 
     let mut filled = String::new();
@@ -712,7 +693,6 @@ fn fill(
             Token::Tag(token_ctx, ext) => {
                 fill_tag(&mut filled, template_bytes, index, data_ctx, token_ctx, ext)
             }
-            _ => (),
         }
     }
     filled
@@ -821,9 +801,7 @@ fn get_general_indent(
     token_ctx: &TokenContext,
 ) -> Option<String> {
     // First in row or first item in tag will be fill indent
-    if token_ctx.first_in_row.is_some() && token_ctx.first_in_row.unwrap()
-        || token_ctx.first_in_row.is_none() && token_ctx.in_tag && token_index == 0
-    {
+    if token_ctx.first_in_row || token_ctx.in_tag && token_index == 0 {
         if token_ctx.in_tag {
             get_indent_in_tag(template_bytes, &data_ctx, token_ctx)
         } else {
@@ -850,9 +828,7 @@ fn get_tag_indent(
     token_ctx: &TokenContext,
 ) -> Option<String> {
     // First in row or first item in tag will be fill indent
-    if token_ctx.first_in_row.is_some() && token_ctx.first_in_row.unwrap()
-        || token_ctx.first_in_row.is_none() && token_ctx.in_tag && token_index == 0
-    {
+    if token_ctx.first_in_row || token_ctx.in_tag && token_index == 0 {
         if token_ctx.in_tag {
             let indent = get_indent_in_tag(template_bytes, &data_ctx, token_ctx);
             if let Some(indent) = indent {
@@ -871,9 +847,10 @@ fn get_tag_indent(
     None
 }
 
-// 若所在tag的indent_base=tag，则缩进值=当前token的原始缩进值-当前token所在tag的所有子token的最小缩进值+当前token所在tag的缩进值；
-// 若所在tag的indent_base=raw，则缩进值=token原始缩进值
-// todo 翻译
+// If tag's atrribute indent_base = tag,
+//     indent = current_token_indent - tag's_sub_token_minimum_indent_length + tag's_indent
+// If tag's atrribute indent_base = raw,
+//     indent = current_token_raw_indent
 fn get_indent_in_tag(
     template_bytes: &[u8],
     data_ctx: &AutoDataContext,
