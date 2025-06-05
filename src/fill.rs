@@ -27,14 +27,6 @@ enum Symbol {
 }
 
 #[derive(Debug)]
-enum Token {
-    Text(TokenContext),
-    Placeholder(TokenContext),
-    Env(TokenContext),
-    Tag(TokenContext, TagExtend),
-}
-
-#[derive(Debug)]
 struct TokenContext {
     start: usize,
     end: usize,
@@ -46,11 +38,6 @@ struct TokenContext {
     is_indent: bool,
     /// Vec<(indent_index_start, indent_index_end)>
     indent: Option<Vec<(usize, usize)>>,
-    // TODO [T0] [ ] 当有多层tag嵌套时，未正确缩进（经排查，是因为当text和标签在同一行时，判断text不是first_in_row（因为当前tag也算入计数），所以未为其添加缩进）
-    // TODO [T0] [v] 生成token时，tag token内记录最小缩进字符长度
-    // TODO [T0] [v] tag token内token仅当为第一个子token或者为当前所在行的第一个token时，执行缩进填充逻辑
-    // TODO [T0] [ ] tag token内token填充缩进时，若所在tag token的indent_base=tag，则缩进值=当前token的原始缩进值-当前token所在tag token的所有子token的最小缩进值+当前token所在tag token的缩进值；若所在tag token的indent_base=raw，则缩进值=token原始缩进值
-    // TODO [T0] [ ] indent_base可选值为inherit、tag、raw。模版根下所有text、placeholder默认为raw，所有tag默认为tag；tag token内所有token默认为inherit；env token全局默认为hidden token，不执行缩进填充
     // TODO [T1] [ ] 冗余代码重构
     // TODO [T1] [ ] 无用换行问题
     // TODO [T2] [ ] 改为每行都记录indent后,first_in_row没必要是Option类型了
@@ -61,12 +48,34 @@ struct TokenContext {
     // TODO [T2] [ ] Token support multiple row define
 }
 
+impl TokenContext {
+    pub fn get_indent(&self, template_bytes: &[u8]) -> Option<String> {
+        if let Some(indent_indexes) = &self.indent {
+            let mut indent = String::new();
+            for (start, end) in indent_indexes {
+                indent.push_str(bytes_to_str(template_bytes, *start, *end));
+            }
+            Some(indent)
+        } else {
+            None
+        }
+    }
+}
+
 #[derive(Debug)]
 struct TagExtend {
     tag: Tag,
     custom_env: Vec<Token>, // Just Token::Env
     sub_tokens: Vec<Token>, // Not include Token::Env
     sub_token_min_indent_len: Option<usize>,
+}
+
+#[derive(Debug)]
+enum Token {
+    Text(TokenContext),
+    Placeholder(TokenContext),
+    Env(TokenContext),
+    Tag(TokenContext, TagExtend),
 }
 
 impl Token {
@@ -588,6 +597,14 @@ impl<'a> AutoDataContext<'a> {
         self.get_string_by_step_in_key(self.data, key)
     }
 
+    pub fn get_usize(&self, key: &str) -> Option<usize> {
+        let str = self.get_string(key);
+        if let Some(str) = str {
+            return Some(str.parse().unwrap());
+        }
+        None
+    }
+
     pub fn get_array(&self, key: &str) -> Option<Vec<Value>> {
         // 1st, scope (step-by-step loop)
         for scope in Rc::clone(&self.scope_stack).borrow().iter().rev() {
@@ -684,148 +701,222 @@ fn fill(
     }
 
     let mut filled = String::new();
-
     for (index, token) in tokens.iter().enumerate() {
-        let indent = match token {
-            Token::Placeholder(token_ctx) | Token::Text(token_ctx) => {
-                // First in row or first item in tag will be fill indent
-                if token_ctx.first_in_row.is_some() && token_ctx.first_in_row.unwrap()
-                    || token_ctx.first_in_row.is_none() && token_ctx.in_tag && index == 0
-                {
-                    if token_ctx.in_tag {
-                        let indent_base = data_ctx
-                            .get_string("indent_base")
-                            .unwrap_or_else(|| String::from("tag"));
-                        match indent_base.as_str() {
-                            "raw" => {
-                                if let Some(indents) = &token_ctx.indent {
-                                    let mut indent = String::new();
-                                    for (start, end) in indents {
-                                        indent.push_str(bytes_to_str(template_bytes, *start, *end));
-                                    }
-                                    Some(indent)
-                                } else {
-                                    None
-                                }
-                            }
-                            _ => {
-                                // indent_base = tag
-                                data_ctx.get_string("tag_indent")
-                            }
-                        }
-                    } else {
-                        if let Some(indents) = &token_ctx.indent {
-                            let mut indent = String::new();
-                            for (start, end) in indents {
-                                indent.push_str(bytes_to_str(template_bytes, *start, *end));
-                            }
-                            Some(indent)
-                        } else {
-                            None
-                        }
-                    }
-                } else {
-                    None
-                }
-            }
-            Token::Tag(token_ctx, _) => {
-                // First in row or first item in tag will be fill indent
-                if token_ctx.first_in_row.is_some() && token_ctx.first_in_row.unwrap()
-                    || token_ctx.first_in_row.is_none() && token_ctx.in_tag && index == 0
-                {
-                    if token_ctx.in_tag {
-                        if let Some(indents) = &token_ctx.indent {
-                            let mut indent = String::new();
-                            for (start, end) in indents {
-                                indent.push_str(bytes_to_str(template_bytes, *start, *end));
-                            }
-                            if let Some(parent_tag_indent) = data_ctx.get_string("tag_indent") {
-                                indent = parent_tag_indent + &indent;
-                            }
-                            if !indent.is_empty() {
-                                data_ctx.set_scope_with_string("tag_indent", indent);
-                            }
-                        }
-                        None
-                    } else {
-                        if let Some(indents) = &token_ctx.indent {
-                            let mut indent = String::new();
-                            for (start, end) in indents {
-                                indent.push_str(bytes_to_str(template_bytes, *start, *end));
-                            }
-                            if !indent.is_empty() {
-                                data_ctx.set_scope_with_string("tag_indent", indent);
-                            }
-                        }
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
-        if let Some(indent) = &indent {
-            filled.push_str(indent);
-        }
-
         match token {
             Token::Text(token_ctx) => {
-                filled.push_str(bytes_to_str(template_bytes, token_ctx.start, token_ctx.end));
+                fill_text(&mut filled, template_bytes, index, data_ctx, token_ctx)
             }
-            Token::Placeholder(TokenContext { start, end, .. }) => {
-                let placeholder = bytes_to_str(template_bytes, *start, *end);
-                let replaced = match data_ctx.get_string(placeholder) {
-                    Some(v) => v,
-                    None => format!("{{{{{}}}}}", placeholder),
-                };
-                filled.push_str(&replaced);
+            Token::Placeholder(token_ctx) => {
+                fill_placeholder(&mut filled, template_bytes, index, data_ctx, token_ctx)
             }
-            Token::Tag(_, ext) => match &ext.tag {
-                Tag::For(item_key, array_key) => {
-                    if let Some(array) = data_ctx.get_array(&array_key) {
-                        data_ctx.push_scope();
-                        data_ctx.set_scope_with_string("@max", (array.len() - 1).to_string());
-                        for i in 0..array.len() {
-                            let item = array.get(i).unwrap();
-                            if item.is_object() {
-                                data_ctx.push_scope();
-                                data_ctx.set_scope_with_string("@index", i.to_string());
-                                data_ctx.set_scope_with_value(&item_key, item.clone());
-                                let replaced = fill(
-                                    template_bytes,
-                                    &ext.custom_env,
-                                    &ext.sub_tokens,
-                                    data_ctx,
-                                );
-                                filled.push_str(&replaced);
-                                data_ctx.pop_scope();
-                            }
-                        }
-                        data_ctx.pop_scope();
-                    }
-                }
-                Tag::If(left, operator, right) => match operator.as_str() {
-                    "==" => {
-                        let left = get_variable_in_tag(&data_ctx, &left);
-                        let right = get_variable_in_tag(&data_ctx, &right);
-                        if left.is_some() && right.is_some() && left.unwrap() == right.unwrap() {
-                            data_ctx.push_scope();
-                            let replaced =
-                                fill(template_bytes, &ext.custom_env, &ext.sub_tokens, data_ctx);
-                            data_ctx.pop_scope();
-                            filled.push_str(&replaced);
-                        }
-                    }
-                    _ => panic!("Unsupported if's operator: {}", operator),
-                },
-                _ => panic!("An impossible error when parse tag token"),
-            },
+            Token::Tag(token_ctx, ext) => {
+                fill_tag(&mut filled, template_bytes, index, data_ctx, token_ctx, ext)
+            }
             _ => (),
         }
     }
-
     filled
+}
+
+fn fill_text(
+    filled: &mut String,
+    template_bytes: &[u8],
+    token_index: usize,
+    data_ctx: &mut AutoDataContext,
+    token_ctx: &TokenContext,
+) {
+    let indent = get_general_indent(template_bytes, token_index, data_ctx, token_ctx);
+    if let Some(indent) = &indent {
+        filled.push_str(indent);
+    }
+    filled.push_str(bytes_to_str(template_bytes, token_ctx.start, token_ctx.end));
+}
+
+fn fill_placeholder(
+    filled: &mut String,
+    template_bytes: &[u8],
+    token_index: usize,
+    data_ctx: &mut AutoDataContext,
+    token_ctx: &TokenContext,
+) {
+    let indent = get_general_indent(template_bytes, token_index, data_ctx, token_ctx);
+    if let Some(indent) = &indent {
+        filled.push_str(indent);
+    }
+
+    let placeholder = bytes_to_str(template_bytes, token_ctx.start, token_ctx.end);
+    let replaced = match data_ctx.get_string(placeholder) {
+        Some(v) => v,
+        None => format!("{{{{{}}}}}", placeholder),
+    };
+    filled.push_str(&replaced);
+}
+
+fn fill_tag(
+    filled: &mut String,
+    template_bytes: &[u8],
+    token_index: usize,
+    data_ctx: &mut AutoDataContext,
+    token_ctx: &TokenContext,
+    tag_ext: &TagExtend,
+) {
+    data_ctx.push_scope();
+    data_ctx.set_scope_with_string(
+        "tag_sub_min_indent_len",
+        tag_ext.sub_token_min_indent_len.unwrap_or(0).to_string(),
+    );
+
+    let indent: Option<String> = get_tag_indent(template_bytes, token_index, data_ctx, token_ctx);
+    if let Some(indent) = &indent {
+        filled.push_str(indent);
+    }
+
+    match &tag_ext.tag {
+        Tag::For(item_key, array_key) => {
+            if let Some(array) = data_ctx.get_array(&array_key) {
+                data_ctx.set_scope_with_string("@max", (array.len() - 1).to_string());
+                for i in 0..array.len() {
+                    let item = array.get(i).unwrap();
+                    if item.is_object() {
+                        data_ctx.push_scope();
+                        data_ctx.set_scope_with_string("@index", i.to_string());
+                        data_ctx.set_scope_with_value(&item_key, item.clone());
+                        let replaced = fill(
+                            template_bytes,
+                            &tag_ext.custom_env,
+                            &tag_ext.sub_tokens,
+                            data_ctx,
+                        );
+                        filled.push_str(&replaced);
+                        data_ctx.pop_scope();
+                    }
+                }
+            }
+        }
+        Tag::If(left, operator, right) => match operator.as_str() {
+            "==" => {
+                let left = get_variable_in_tag(&data_ctx, &left);
+                let right = get_variable_in_tag(&data_ctx, &right);
+                if left.is_some() && right.is_some() && left.unwrap() == right.unwrap() {
+                    let replaced = fill(
+                        template_bytes,
+                        &tag_ext.custom_env,
+                        &tag_ext.sub_tokens,
+                        data_ctx,
+                    );
+                    filled.push_str(&replaced);
+                }
+            }
+            _ => panic!("Unsupported if's operator: {}", operator),
+        },
+        _ => panic!("An impossible error when parse tag token"),
+    }
+    data_ctx.pop_scope();
+}
+
+fn get_general_indent(
+    template_bytes: &[u8],
+    token_index: usize,
+    data_ctx: &mut AutoDataContext,
+    token_ctx: &TokenContext,
+) -> Option<String> {
+    // First in row or first item in tag will be fill indent
+    if token_ctx.first_in_row.is_some() && token_ctx.first_in_row.unwrap()
+        || token_ctx.first_in_row.is_none() && token_ctx.in_tag && token_index == 0
+    {
+        if token_ctx.in_tag {
+            get_indent_in_tag(template_bytes, &data_ctx, token_ctx)
+        } else {
+            // indent_base=raw default when Token in root
+            if let Some(indents) = &token_ctx.indent {
+                let mut indent = String::new();
+                for (start, end) in indents {
+                    indent.push_str(bytes_to_str(template_bytes, *start, *end));
+                }
+                Some(indent)
+            } else {
+                None
+            }
+        }
+    } else {
+        None
+    }
+}
+
+fn get_tag_indent(
+    template_bytes: &[u8],
+    token_index: usize,
+    data_ctx: &mut AutoDataContext,
+    token_ctx: &TokenContext,
+) -> Option<String> {
+    // First in row or first item in tag will be fill indent
+    if token_ctx.first_in_row.is_some() && token_ctx.first_in_row.unwrap()
+        || token_ctx.first_in_row.is_none() && token_ctx.in_tag && token_index == 0
+    {
+        if token_ctx.in_tag {
+            let indent = get_indent_in_tag(template_bytes, &data_ctx, token_ctx);
+            if let Some(indent) = indent {
+                if !indent.is_empty() {
+                    data_ctx.set_scope_with_string("tag_indent", indent);
+                }
+            }
+        } else {
+            if let Some(indent) = token_ctx.get_indent(template_bytes) {
+                if !indent.is_empty() {
+                    data_ctx.set_scope_with_string("tag_indent", indent);
+                }
+            }
+        }
+    }
+    None
+}
+
+// 若所在tag的indent_base=tag，则缩进值=当前token的原始缩进值-当前token所在tag的所有子token的最小缩进值+当前token所在tag的缩进值；
+// 若所在tag的indent_base=raw，则缩进值=token原始缩进值
+// todo 翻译
+fn get_indent_in_tag(
+    template_bytes: &[u8],
+    data_ctx: &AutoDataContext,
+    token_ctx: &TokenContext,
+) -> Option<String> {
+    let indent_base = data_ctx
+        .get_string("indent_base")
+        .unwrap_or_else(|| String::from("tag"));
+    match indent_base.as_str() {
+        "raw" => {
+            if let Some(indents) = &token_ctx.indent {
+                let mut indent = String::new();
+                for (start, end) in indents {
+                    indent.push_str(bytes_to_str(template_bytes, *start, *end));
+                }
+                Some(indent)
+            } else {
+                None
+            }
+        }
+        _ => {
+            // in_tag and indent_base=tag
+            let raw_indent = token_ctx.get_indent(template_bytes);
+            let tag_indent = data_ctx.get_string("tag_indent");
+            if let Some(mut raw_indent) = raw_indent {
+                let tag_sub_min_indent_len =
+                    data_ctx.get_usize("tag_sub_min_indent_len").unwrap_or(0);
+                if tag_sub_min_indent_len > 0 {
+                    raw_indent = raw_indent
+                        .get(tag_sub_min_indent_len..)
+                        .map(|o| o.to_owned())
+                        .unwrap_or(String::new());
+                }
+                if let Some(tag_indent) = tag_indent {
+                    Some(tag_indent + &raw_indent)
+                } else {
+                    Some(raw_indent)
+                }
+            } else {
+                tag_indent
+            }
+        }
+    }
 }
 
 fn bytes_to_str(bytes: &[u8], start: usize, end: usize) -> &str {
