@@ -49,7 +49,8 @@ fn fill(
         println!(
             "No more template be found in {}",
             template_directory_path_string
-        )
+        );
+        return;
     }
 
     let data_path = Path::new(&data_path_string);
