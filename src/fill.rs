@@ -50,12 +50,13 @@ struct TokenContext {
     is_indent: bool,
     /// Vec<(indent_index_start, indent_index_end)>
     indent: Option<Vec<(usize, usize)>>,
-    // TODO [T1] [ ] 冗余代码重构
-    // TODO [T1] [ ] 无用换行问题
+    // TODO [T1] [ ] Tag 'If' Support single bool
+    // TOOD [T1] [ ] Tag 'If' Support multiple bool
+    // TODO [T2] [ ] 冗余代码重构
+    // TODO [T2] [ ] 无用换行问题
     // TODO [T2] [ ] tag类token没有记录start和end，默认应该记录head的start和end，然后可以考虑添加属性记录tail的start和end
-    // TODO [T2] [ ] Tag 'If' Support single bool
-    // TOOD [T2] [ ] Tag 'If' Support multiple bool
     // TODO [T2] [ ] Token support multiple row define
+    // TODO [T3] [ ] 当无缩进时indent属性应设为None，而非Some([])
 }
 
 impl TokenContext {
@@ -204,6 +205,10 @@ impl<'a> GenerateTokensContext {
                             | Token::Tag(last_token_ctx, _)) = last_token;
                             last_token_ctx.end_of_row = true;
                         }
+                        // Need to return here;
+                        // otherwise, the '\r\n' or '\n' will be considered a whitespace character,
+                        // mark 'is_indent' falg and ignore.
+                        return token;
                     }
                     // text is 'text + break symbol'
                     else {
