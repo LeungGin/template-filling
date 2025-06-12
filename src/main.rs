@@ -7,6 +7,9 @@ use serde_json::Value;
 mod cli;
 mod fill;
 
+const TEMPLATE_SUFFIX: &str = ".template";
+const TEMPLATE_SUFFIX_SHORT: &str = ".tmpl";
+
 struct Template {
     pub path_string: String,
     pub export_path_string: Option<String>,
@@ -131,7 +134,10 @@ fn find_all_available_templates(
                     .file_name()
                     .into_string()
                     .expect("Get template name fail");
-                if entry_name.starts_with(&template_prefix) && entry_name.ends_with(".template") {
+                if entry_name.starts_with(&template_prefix)
+                    && (entry_name.ends_with(TEMPLATE_SUFFIX)
+                        || entry_name.ends_with(TEMPLATE_SUFFIX_SHORT))
+                {
                     matches.push(package_template_obj(
                         &entry_path,
                         template_tag,
