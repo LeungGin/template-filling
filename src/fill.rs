@@ -6,16 +6,116 @@ use serde_json::{json, Value};
 pub fn fill_template(template_content: String, data: &Value) -> String {
     // Generate tokens
     let bytes = template_content.as_bytes();
-    let (custom_envs, tokens) = generate_tokens(bytes);
+    let template_ast = generate_tokens(bytes);
     // debug
-    println!("{:?}", tokens);
+    if cfg!(debug_assertions) {
+        println!("{:?}", template_ast);
+    }
     // Fill with token
-    fill(
-        bytes,
-        &custom_envs,
-        &tokens,
-        &mut AutoDataContext::new(data),
-    )
+    fill(bytes, &template_ast, &mut AutoDataContext::new(data))
+}
+
+/// Template Abstract Syntax Table
+#[derive(Debug)]
+struct TemplateASTable {
+    custom_envs: Vec<EnvDefine>,
+    syntax_lines: Vec<SyntaxLine>,
+}
+
+impl TemplateASTable {
+    pub fn new() -> Self {
+        let mut sf = Self {
+            custom_envs: Vec::new(),
+            syntax_lines: Vec::new(),
+        };
+        sf.new_line(None);
+        sf
+    }
+
+    pub fn push_env(&mut self, env_define: EnvDefine) {
+        let line = self.syntax_lines.last_mut().expect("No line can be found");
+        line.env_define_cnt += 1;
+
+        self.custom_envs.push(env_define);
+    }
+
+    pub fn push_token(&mut self, token: Token) {
+        let line = self.syntax_lines.last_mut().expect("No line can be found");
+        // Record indent
+        if let Token::Text(
+            TokenContext {
+                is_indent, indent, ..
+            },
+            ..,
+        ) = &token
+        {
+            if *is_indent {
+                line.indent = indent.clone();
+                return;
+            }
+        }
+        // Record token count
+        match &token {
+            Token::Text(_) => line.text_token_cnt += 1,
+            Token::Placeholder(_) => line.placeholder_token_cnt += 1,
+            Token::Tag(..) => line.tag_token_cnt += 1,
+        }
+        // Push token
+        line.tokens.push(token);
+    }
+
+    pub fn last_token_mut(&mut self) -> Option<&mut Token> {
+        let line = self.syntax_lines.last_mut().expect("No line can be found");
+        line.tokens.last_mut()
+    }
+
+    /// Execute this function when line finished
+    pub fn new_line(&mut self, currnet_line_line_feed: Option<LineFeed>) {
+        if let Some(line) = self.syntax_lines.last_mut() {
+            line.line_feed = currnet_line_line_feed;
+        }
+
+        self.syntax_lines.push(SyntaxLine::new());
+    }
+}
+
+#[derive(Debug)]
+struct SyntaxLine {
+    pub tokens: Vec<Token>,
+    pub env_define_cnt: usize,
+    pub text_token_cnt: usize,
+    pub placeholder_token_cnt: usize,
+    pub tag_token_cnt: usize,
+    /// Index start and end of indent text.
+    /// There may be multiple separated whitespace characters,
+    /// for example (The * symbol stands for whitespace characters),
+    /// ```
+    /// *******<$ custom_env = 123 $>***
+    /// ```
+    pub indent: Option<Vec<(usize, usize)>>,
+    pub line_feed: Option<LineFeed>,
+}
+
+#[derive(Debug)]
+enum LineFeed {
+    /// \n
+    LF,
+    /// \r\n
+    CRLF,
+}
+
+impl SyntaxLine {
+    pub fn new() -> Self {
+        Self {
+            tokens: Vec::new(),
+            env_define_cnt: 0,
+            text_token_cnt: 0,
+            placeholder_token_cnt: 0,
+            tag_token_cnt: 0,
+            indent: None,
+            line_feed: None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -50,8 +150,12 @@ struct TokenContext {
     is_indent: bool,
     /// Vec<(indent_index_start, indent_index_end)>
     indent: Option<Vec<(usize, usize)>>,
+    // TODO [T0] [ ] 解析Token时，增加语法行（一条语法行包含1到多条真实行，如if在多行定义时即解析为同一行语法行，包含多条真实行）的概念，并且行上下文中包含构成统计（env个数，tag个数，text各处，缩进文本）；这样换行处理就能有足够数据依据做正确处理
+    // TODO [T0] [ ] 换行未正确处理，当为为空白行时（仅换行符或空白字符），原样输出；当空白行中仅含env定义，忽略该行；当空白行中仅含tag定义，忽略该行；其他情况，常规处理后输出。
     // TODO [T1] [ ] Tag 'If' Support single bool
     // TOOD [T1] [ ] Tag 'If' Support multiple bool
+    // TODO [T1] [ ] 模版文件使用\r\n作为换行符时，会导致start序号错误，一般提示使用了len的长度作为start的值
+    // TODO [T1] [ ] 模版为空时会导致start的值错误取到usize的最大值
     // TODO [T2] [ ] 冗余代码重构
     // TODO [T2] [ ] 无用换行问题
     // TODO [T2] [ ] tag类token没有记录start和end，默认应该记录head的start和end，然后可以考虑添加属性记录tail的start和end
@@ -76,8 +180,7 @@ impl TokenContext {
 #[derive(Debug)]
 struct TagExtend {
     tag: Tag,
-    custom_env: Vec<EnvDefine>, // Just Token::Env
-    sub_tokens: Vec<Token>,     // Not include Token::Env
+    sub_ast: TemplateASTable,
     sub_token_min_indent_len: Option<usize>,
 }
 
@@ -138,8 +241,7 @@ impl Token {
             },
             TagExtend {
                 tag,
-                custom_env: Vec::new(),
-                sub_tokens: Vec::new(),
+                sub_ast: TemplateASTable::new(),
                 sub_token_min_indent_len: None,
             },
         );
@@ -149,8 +251,7 @@ impl Token {
 
 struct GenerateTokensContext {
     pub last_pos: usize,
-    custom_vars: Vec<EnvDefine>,
-    tokens: Vec<Token>,
+    pub template_ast: TemplateASTable,
 
     // <<< Keep coding, time will reward --- 2025/5/22 1:01 >>>
     pub now_in_raw: bool,
@@ -171,8 +272,7 @@ impl<'a> GenerateTokensContext {
     fn new() -> Self {
         Self {
             last_pos: 0,
-            custom_vars: Vec::new(),
-            tokens: Vec::new(),
+            template_ast: TemplateASTable::new(),
             now_in_raw: false,
             now_has_first_non_blank: false,
             indent_in_row: Vec::new(),
@@ -199,7 +299,7 @@ impl<'a> GenerateTokensContext {
                             && template_bytes[token_ctx.start + 1] == b'\n'
                     {
                         // Mark the previous token as the last one
-                        if let Some(last_token) = self.tokens.last_mut() {
+                        if let Some(last_token) = self.template_ast.last_token_mut() {
                             let (Token::Text(last_token_ctx)
                             | Token::Placeholder(last_token_ctx)
                             | Token::Tag(last_token_ctx, _)) = last_token;
@@ -252,43 +352,32 @@ impl<'a> GenerateTokensContext {
         token
     }
 
-    /// When row is break, should run this function to reset status
-    pub fn reset_raw_context(&mut self) {
-        self.now_has_first_non_blank = false;
-        self.indent_in_row.clear();
-    }
-
-    pub fn push_custom_env(&mut self, env: EnvDefine) {
+    pub fn push_env(&mut self, env: EnvDefine) {
         if self.now_in_tag() {
-            if let Token::Tag(_, TagExtend { custom_env, .. }) =
+            if let Token::Tag(_, TagExtend { sub_ast, .. }) =
                 self.tag_token_stack.last_mut().unwrap()
             {
-                custom_env.push(env);
+                sub_ast.push_env(env);
             } else {
                 panic!("An impossible error when push token")
             }
         } else {
-            self.custom_vars.push(env);
+            self.template_ast.push_env(env);
         }
     }
 
     pub fn push_token(&mut self, token: Token) {
-        if let Token::Text(TokenContext { is_indent, .. }, ..) = token {
-            if is_indent {
-                return;
-            }
-        }
         if self.now_in_tag() {
             if let Token::Tag(
                 _,
                 TagExtend {
-                    sub_tokens,
+                    sub_ast,
                     sub_token_min_indent_len,
                     ..
                 },
             ) = self.tag_token_stack.last_mut().unwrap()
             {
-                // log down the min indent len
+                // Record the min indent len
                 match &token {
                     Token::Placeholder(token_ctx)
                     | Token::Text(token_ctx)
@@ -312,13 +401,32 @@ impl<'a> GenerateTokensContext {
                         }
                     }
                 }
-                // log down sub token
-                sub_tokens.push(token);
+                // Record sub token
+                sub_ast.push_token(token);
             } else {
                 panic!("An impossible error when push token")
             }
         } else {
-            self.tokens.push(token);
+            self.template_ast.push_token(token);
+        }
+    }
+
+    /// When line is break, should run this function to reset line status and new line
+    pub fn new_line(&mut self, current_line_feed: LineFeed) {
+        // Reset line status record
+        self.now_has_first_non_blank = false;
+        self.indent_in_row.clear();
+
+        if self.now_in_tag() {
+            if let Token::Tag(_, TagExtend { sub_ast, .. }) =
+                self.tag_token_stack.last_mut().unwrap()
+            {
+                sub_ast.new_line(Some(current_line_feed));
+            } else {
+                panic!("An impossible error when push token")
+            }
+        } else {
+            self.template_ast.new_line(Some(current_line_feed));
         }
     }
 
@@ -327,7 +435,7 @@ impl<'a> GenerateTokensContext {
     }
 }
 
-fn generate_tokens(template_bytes: &[u8]) -> (Vec<EnvDefine>, Vec<Token>) {
+fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
     let mut ctx = GenerateTokensContext::new();
 
     let bytes = template_bytes;
@@ -446,7 +554,7 @@ fn generate_tokens(template_bytes: &[u8]) -> (Vec<EnvDefine>, Vec<Token>) {
                         panic!("Env symbol missing '=', it should be define like '{{$ key = value $}}'")
                     }
                     let env = EnvDefine::new(start_idx, i);
-                    ctx.push_custom_env(env);
+                    ctx.push_env(env);
                     ctx.last_pos = i + 2;
                 }
                 i += 2;
@@ -485,17 +593,23 @@ fn generate_tokens(template_bytes: &[u8]) -> (Vec<EnvDefine>, Vec<Token>) {
             }
             (b'\r', b'\n') => {
                 let last_pos = ctx.last_pos;
-                let token = Token::new_text(template_bytes, &mut ctx, last_pos, i + 2);
-                ctx.push_token(token);
-                ctx.reset_raw_context();
+                if last_pos + 2 < i + 1 {
+                    // No just line feed
+                    let token = Token::new_text(template_bytes, &mut ctx, last_pos, i);
+                    ctx.push_token(token);
+                }
+                ctx.new_line(LineFeed::CRLF);
                 ctx.last_pos = i + 2;
                 i += 2;
             }
             (b'\n', _) => {
                 let last_pos = ctx.last_pos;
-                let token = Token::new_text(template_bytes, &mut ctx, last_pos, i + 1);
-                ctx.push_token(token);
-                ctx.reset_raw_context();
+                if last_pos + 1 < i {
+                    // No just line feed
+                    let token = Token::new_text(template_bytes, &mut ctx, last_pos, i);
+                    ctx.push_token(token);
+                }
+                ctx.new_line(LineFeed::LF);
                 ctx.last_pos = i + 1;
                 i += 1;
             }
@@ -505,7 +619,7 @@ fn generate_tokens(template_bytes: &[u8]) -> (Vec<EnvDefine>, Vec<Token>) {
     let last_pos = ctx.last_pos;
     let token = Token::new_text(template_bytes, &mut ctx, last_pos, bytes.len());
     ctx.push_token(token);
-    (ctx.custom_vars, ctx.tokens)
+    ctx.template_ast
 }
 
 #[derive(Debug)]
@@ -677,26 +791,38 @@ impl<'a> AutoDataContext<'a> {
 
 fn fill(
     template_bytes: &[u8],
-    custom_envs: &Vec<EnvDefine>,
-    tokens: &Vec<Token>,
+    template_ast: &TemplateASTable,
     data_ctx: &mut AutoDataContext,
 ) -> String {
-    for env in custom_envs {
-        let (k, v) = get_kv_from_env_token(template_bytes, env.start, env.end);
+    for env in &template_ast.custom_envs {
+        let (k, v) = get_kv_from_env_define(template_bytes, env.start, env.end);
         data_ctx.set_scope_with_string(k, v.to_owned());
     }
 
     let mut filled = String::new();
-    for (index, token) in tokens.iter().enumerate() {
-        match token {
-            Token::Text(token_ctx) => {
-                fill_text(&mut filled, template_bytes, index, data_ctx, token_ctx)
+    for line in &template_ast.syntax_lines {
+        for (token_idx, token) in line.tokens.iter().enumerate() {
+            match token {
+                Token::Text(token_ctx) => {
+                    fill_text(&mut filled, template_bytes, token_idx, data_ctx, token_ctx)
+                }
+                Token::Placeholder(token_ctx) => {
+                    fill_placeholder(&mut filled, template_bytes, token_idx, data_ctx, token_ctx)
+                }
+                Token::Tag(token_ctx, ext) => fill_tag(
+                    &mut filled,
+                    template_bytes,
+                    token_idx,
+                    data_ctx,
+                    token_ctx,
+                    ext,
+                ),
             }
-            Token::Placeholder(token_ctx) => {
-                fill_placeholder(&mut filled, template_bytes, index, data_ctx, token_ctx)
-            }
-            Token::Tag(token_ctx, ext) => {
-                fill_tag(&mut filled, template_bytes, index, data_ctx, token_ctx, ext)
+        }
+        if let Some(line_feed) = &line.line_feed {
+            match line_feed {
+                LineFeed::LF => filled.push_str("\n"),
+                LineFeed::CRLF => filled.push_str("\r\n"),
             }
         }
     }
@@ -706,11 +832,11 @@ fn fill(
 fn fill_text(
     filled: &mut String,
     template_bytes: &[u8],
-    token_index: usize,
+    token_idx: usize,
     data_ctx: &mut AutoDataContext,
     token_ctx: &TokenContext,
 ) {
-    let indent = get_general_indent(template_bytes, token_index, data_ctx, token_ctx);
+    let indent = get_general_indent(template_bytes, token_idx, data_ctx, token_ctx);
     if let Some(indent) = &indent {
         filled.push_str(indent);
     }
@@ -720,11 +846,11 @@ fn fill_text(
 fn fill_placeholder(
     filled: &mut String,
     template_bytes: &[u8],
-    token_index: usize,
+    token_idx: usize,
     data_ctx: &mut AutoDataContext,
     token_ctx: &TokenContext,
 ) {
-    let indent = get_general_indent(template_bytes, token_index, data_ctx, token_ctx);
+    let indent = get_general_indent(template_bytes, token_idx, data_ctx, token_ctx);
     if let Some(indent) = &indent {
         filled.push_str(indent);
     }
@@ -732,7 +858,7 @@ fn fill_placeholder(
     let placeholder = bytes_to_str(template_bytes, token_ctx.start, token_ctx.end);
     let replaced = match data_ctx.get_string(placeholder) {
         Some(v) => v,
-        None => format!("{{{{{}}}}}", placeholder),
+        None => format!("{{{{{}: Not found}}}}", placeholder),
     };
     filled.push_str(&replaced);
 }
@@ -740,7 +866,7 @@ fn fill_placeholder(
 fn fill_tag(
     filled: &mut String,
     template_bytes: &[u8],
-    token_index: usize,
+    token_idx: usize,
     data_ctx: &mut AutoDataContext,
     token_ctx: &TokenContext,
     tag_ext: &TagExtend,
@@ -751,7 +877,7 @@ fn fill_tag(
         tag_ext.sub_token_min_indent_len.unwrap_or(0).to_string(),
     );
 
-    let indent: Option<String> = get_tag_indent(template_bytes, token_index, data_ctx, token_ctx);
+    let indent: Option<String> = get_tag_indent(template_bytes, token_idx, data_ctx, token_ctx);
     if let Some(indent) = &indent {
         filled.push_str(indent);
     }
@@ -766,12 +892,7 @@ fn fill_tag(
                         data_ctx.push_scope();
                         data_ctx.set_scope_with_string("@index", i.to_string());
                         data_ctx.set_scope_with_value(&item_key, item.clone());
-                        let replaced = fill(
-                            template_bytes,
-                            &tag_ext.custom_env,
-                            &tag_ext.sub_tokens,
-                            data_ctx,
-                        );
+                        let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx);
                         filled.push_str(&replaced);
                         data_ctx.pop_scope();
                     }
@@ -783,12 +904,7 @@ fn fill_tag(
                 let left = get_variable_in_tag(&data_ctx, &left);
                 let right = get_variable_in_tag(&data_ctx, &right);
                 if left.is_some() && right.is_some() && left.unwrap() == right.unwrap() {
-                    let replaced = fill(
-                        template_bytes,
-                        &tag_ext.custom_env,
-                        &tag_ext.sub_tokens,
-                        data_ctx,
-                    );
+                    let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx);
                     filled.push_str(&replaced);
                 }
             }
@@ -917,7 +1033,7 @@ fn get_variable_in_tag(data_ctx: &AutoDataContext, variable: &str) -> Option<Str
 }
 
 /// return (env_key, env_value)
-fn get_kv_from_env_token(template_bytes: &[u8], start: usize, end: usize) -> (&str, &str) {
+fn get_kv_from_env_define(template_bytes: &[u8], start: usize, end: usize) -> (&str, &str) {
     let (k, v) = bytes_to_str(template_bytes, start, end)
         .split_once("=")
         .unwrap();

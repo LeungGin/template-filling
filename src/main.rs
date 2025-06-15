@@ -80,7 +80,7 @@ fn fill(
             let filled = fill::fill_template(template_content, &data);
             let elapsed = start.elapsed();
             println!("[debug] fill::fill_template time elapsed is {:?}", elapsed);
-            if elapsed.as_millis() >= 10 {
+            if elapsed.as_millis() >= 5 {
                 panic!("The execution time of fill::fill_template has exceeded the 10ms performance threshold")
             }
             filled
