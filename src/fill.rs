@@ -136,7 +136,6 @@ struct TokenContext {
     /// Vec<(indent_index_start, indent_index_end)>
     indent: Option<Vec<(usize, usize)>>,
     // TODO [T0] Tag::If表达式中变量不再需要$前缀且不再允许数字开头变量，字符串需加双引号
-    // TODO [T0] Tag::for当仅支持遍历object数组，应增加支持字符串数组和数字数组
     // TODO [T0] [ ] 换行未正确处理，当为为空白行时（仅换行符或空白字符），原样输出；当空白行中仅含env定义，忽略该行；当空白行中仅含tag定义，忽略该行；其他情况，常规处理后输出。
     // TODO [T1] [ ] Tag 'If' Support single bool
     // TOOD [T1] [ ] Tag 'If' Support multiple bool
@@ -891,14 +890,12 @@ fn fill_tag(
                 data_ctx.set_scope_with_string("@max", (array.len() - 1).to_string());
                 for i in 0..array.len() {
                     let item = array.get(i).unwrap();
-                    if item.is_object() {
-                        data_ctx.push_scope();
-                        data_ctx.set_scope_with_string("@index", i.to_string());
-                        data_ctx.set_scope_with_value(&item_key, item.clone());
-                        let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx, true);
-                        filled.push_str(&replaced);
-                        data_ctx.pop_scope();
-                    }
+                    data_ctx.push_scope();
+                    data_ctx.set_scope_with_string("@index", i.to_string());
+                    data_ctx.set_scope_with_value(&item_key, item.clone());
+                    let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx, true);
+                    filled.push_str(&replaced);
+                    data_ctx.pop_scope();
                 }
             }
         }
