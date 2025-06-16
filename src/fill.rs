@@ -12,7 +12,7 @@ pub fn fill_template(template_content: String, data: &Value) -> String {
         println!("{:?}", template_ast);
     }
     // Fill with token
-    fill(bytes, &template_ast, &mut AutoDataContext::new(data))
+    fill(bytes, &template_ast, &mut AutoDataContext::new(data), false)
 }
 
 /// Template Abstract Syntax Table
@@ -42,15 +42,8 @@ impl TemplateASTable {
     pub fn push_token(&mut self, token: Token) {
         let line = self.syntax_lines.last_mut().expect("No line can be found");
         // Record indent
-        if let Token::Text(
-            TokenContext {
-                is_indent, indent, ..
-            },
-            ..,
-        ) = &token
-        {
+        if let Token::Text(TokenContext { is_indent, .. }, ..) = &token {
             if *is_indent {
-                line.indent = indent.clone();
                 return;
             }
         }
@@ -86,13 +79,6 @@ struct SyntaxLine {
     pub text_token_cnt: usize,
     pub placeholder_token_cnt: usize,
     pub tag_token_cnt: usize,
-    /// Index start and end of indent text.
-    /// There may be multiple separated whitespace characters,
-    /// for example (The * symbol stands for whitespace characters),
-    /// ```
-    /// *******<$ custom_env = 123 $>***
-    /// ```
-    pub indent: Option<Vec<(usize, usize)>>,
     pub line_feed: Option<LineFeed>,
 }
 
@@ -112,7 +98,6 @@ impl SyntaxLine {
             text_token_cnt: 0,
             placeholder_token_cnt: 0,
             tag_token_cnt: 0,
-            indent: None,
             line_feed: None,
         }
     }
@@ -144,13 +129,14 @@ struct TokenContext {
     end: usize,
     /// Determine by checking the 'tag_token_stack' in GenerateTokensContext, false if empty
     in_tag: bool,
-    first_in_row: bool,
-    end_of_row: bool,
+    first_in_line: bool,
+    end_of_line: bool,
     /// Which is the indent in row
     is_indent: bool,
     /// Vec<(indent_index_start, indent_index_end)>
     indent: Option<Vec<(usize, usize)>>,
-    // TODO [T0] [ ] 解析Token时，增加语法行（一条语法行包含1到多条真实行，如if在多行定义时即解析为同一行语法行，包含多条真实行）的概念，并且行上下文中包含构成统计（env个数，tag个数，text各处，缩进文本）；这样换行处理就能有足够数据依据做正确处理
+    // TODO [T0] Tag::If表达式中变量不再需要$前缀且不再允许数字开头变量，字符串需加双引号
+    // TODO [T0] Tag::for当仅支持遍历object数组，应增加支持字符串数组和数字数组
     // TODO [T0] [ ] 换行未正确处理，当为为空白行时（仅换行符或空白字符），原样输出；当空白行中仅含env定义，忽略该行；当空白行中仅含tag定义，忽略该行；其他情况，常规处理后输出。
     // TODO [T1] [ ] Tag 'If' Support single bool
     // TOOD [T1] [ ] Tag 'If' Support multiple bool
@@ -202,8 +188,8 @@ impl Token {
             start,
             end,
             in_tag: ctx.now_in_tag(),
-            first_in_row: false,
-            end_of_row: false,
+            first_in_line: false,
+            end_of_line: false,
             is_indent: false,
             indent: None,
         });
@@ -220,8 +206,8 @@ impl Token {
             start,
             end,
             in_tag: ctx.now_in_tag(),
-            first_in_row: false,
-            end_of_row: false,
+            first_in_line: false,
+            end_of_line: false,
             is_indent: false,
             indent: None,
         });
@@ -234,8 +220,8 @@ impl Token {
                 start: 0,
                 end: 0,
                 in_tag: ctx.now_in_tag(),
-                first_in_row: false,
-                end_of_row: false,
+                first_in_line: false,
+                end_of_line: false,
                 is_indent: false,
                 indent: None,
             },
@@ -262,7 +248,7 @@ struct GenerateTokensContext {
     /// ```
     /// *******<$ custom_env = 123 $>***
     /// ```
-    pub indent_in_row: Vec<(usize, usize)>,
+    pub indent_in_line: Vec<(usize, usize)>,
 
     pub head_symbol_stack: Vec<(Symbol, usize)>,
     pub tag_token_stack: Vec<Token>,
@@ -275,7 +261,7 @@ impl<'a> GenerateTokensContext {
             template_ast: TemplateASTable::new(),
             now_in_raw: false,
             now_has_first_non_blank: false,
-            indent_in_row: Vec::new(),
+            indent_in_line: Vec::new(),
             head_symbol_stack: Vec::with_capacity(1),
             tag_token_stack: Vec::new(),
         }
@@ -303,7 +289,7 @@ impl<'a> GenerateTokensContext {
                             let (Token::Text(last_token_ctx)
                             | Token::Placeholder(last_token_ctx)
                             | Token::Tag(last_token_ctx, _)) = last_token;
-                            last_token_ctx.end_of_row = true;
+                            last_token_ctx.end_of_line = true;
                         }
                         // Need to return here;
                         // otherwise, the '\r\n' or '\n' will be considered a whitespace character,
@@ -313,7 +299,7 @@ impl<'a> GenerateTokensContext {
                     // text is 'text + break symbol'
                     else {
                         // Mark the current text token as the last one
-                        token_ctx.end_of_row = true;
+                        token_ctx.end_of_line = true;
                     }
                 }
                 // General text
@@ -328,24 +314,24 @@ impl<'a> GenerateTokensContext {
                         self.now_has_first_non_blank = true;
                         let non_blank_len = non_blank_text.len();
                         if non_blank_len < text.len() {
-                            self.indent_in_row
+                            self.indent_in_line
                                 .push((start, start + (text.len() - non_blank_len)));
                         }
-                        token_ctx.first_in_row = true;
-                        token_ctx.indent = Some(mem::replace(&mut self.indent_in_row, Vec::new()));
+                        token_ctx.first_in_line = true;
+                        token_ctx.indent = Some(mem::replace(&mut self.indent_in_line, Vec::new()));
                         token_ctx.start = end - non_blank_len;
                     } else {
                         // is blank text and at the beginning of current raw
                         token_ctx.is_indent = true;
-                        self.indent_in_row.push((start, end));
+                        self.indent_in_line.push((start, end));
                     }
                 }
             }
             Token::Tag(ref mut token_ctx, _) | Token::Placeholder(ref mut token_ctx) => {
                 if !self.now_has_first_non_blank {
                     self.now_has_first_non_blank = true;
-                    token_ctx.first_in_row = true;
-                    token_ctx.indent = Some(mem::replace(&mut self.indent_in_row, Vec::new()));
+                    token_ctx.first_in_line = true;
+                    token_ctx.indent = Some(mem::replace(&mut self.indent_in_line, Vec::new()));
                 }
             }
         }
@@ -382,7 +368,7 @@ impl<'a> GenerateTokensContext {
                     Token::Placeholder(token_ctx)
                     | Token::Text(token_ctx)
                     | Token::Tag(token_ctx, ..) => {
-                        if token_ctx.first_in_row {
+                        if token_ctx.first_in_line {
                             let token_indent_len =
                                 token_ctx.indent.as_ref().map_or(0, |indent_entries| {
                                     let mut len = 0;
@@ -415,7 +401,7 @@ impl<'a> GenerateTokensContext {
     pub fn new_line(&mut self, current_line_feed: LineFeed) {
         // Reset line status record
         self.now_has_first_non_blank = false;
-        self.indent_in_row.clear();
+        self.indent_in_line.clear();
 
         if self.now_in_tag() {
             if let Token::Tag(_, TagExtend { sub_ast, .. }) =
@@ -493,8 +479,8 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                                             if let Token::Tag(end_token_ctx, ..) =
                                                 Token::new_tag(template_bytes, &mut ctx, tag)
                                             {
-                                                head_token_ctx.end_of_row =
-                                                    end_token_ctx.end_of_row;
+                                                head_token_ctx.end_of_line =
+                                                    end_token_ctx.end_of_line;
                                                 ctx.push_token(head_tag_token);
                                             }
                                         }
@@ -519,8 +505,8 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                                             if let Token::Tag(end_token_ctx, ..) =
                                                 Token::new_tag(template_bytes, &mut ctx, tag)
                                             {
-                                                head_token_ctx.end_of_row =
-                                                    end_token_ctx.end_of_row;
+                                                head_token_ctx.end_of_line =
+                                                    end_token_ctx.end_of_line;
                                                 ctx.push_token(head_tag_token);
                                             }
                                         }
@@ -793,6 +779,7 @@ fn fill(
     template_bytes: &[u8],
     template_ast: &TemplateASTable,
     data_ctx: &mut AutoDataContext,
+    is_for_tag_fill: bool,
 ) -> String {
     for env in &template_ast.custom_envs {
         let (k, v) = get_kv_from_env_define(template_bytes, env.start, env.end);
@@ -802,6 +789,9 @@ fn fill(
     let mut filled = String::new();
     for line in &template_ast.syntax_lines {
         for (token_idx, token) in line.tokens.iter().enumerate() {
+            // 以下规则TODO：
+            // 1、如果第一个token是Tag且第一个非Tag Token前进行过换行，则第一个非Tag Token前填充第一个Tag Token的indent
+            // 2、如果第一个token是Tag且第一个非Tag Token前未进行过换行，且第一个非Tag Token前未发生任何填充，则第一个非Tag Token前填充第一个Tag Token的indent
             match token {
                 Token::Text(token_ctx) => {
                     fill_text(&mut filled, template_bytes, token_idx, data_ctx, token_ctx)
@@ -819,10 +809,23 @@ fn fill(
                 ),
             }
         }
-        if let Some(line_feed) = &line.line_feed {
-            match line_feed {
-                LineFeed::LF => filled.push_str("\n"),
-                LineFeed::CRLF => filled.push_str("\r\n"),
+        if is_for_tag_fill {
+            let join_with = data_ctx.get_string("join_with");
+            if let Some(ch) = join_with {
+                if ch == "\\n" {
+                    filled.push_str("\n");
+                } else if ch == "\\r\\n" {
+                    filled.push_str("\r\n");
+                } else {
+                    filled.push_str(&ch);
+                }
+            }
+        } else {
+            if let Some(line_feed) = &line.line_feed {
+                match line_feed {
+                    LineFeed::LF => filled.push_str("\n"),
+                    LineFeed::CRLF => filled.push_str("\r\n"),
+                }
             }
         }
     }
@@ -892,7 +895,7 @@ fn fill_tag(
                         data_ctx.push_scope();
                         data_ctx.set_scope_with_string("@index", i.to_string());
                         data_ctx.set_scope_with_value(&item_key, item.clone());
-                        let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx);
+                        let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx, true);
                         filled.push_str(&replaced);
                         data_ctx.pop_scope();
                     }
@@ -904,7 +907,7 @@ fn fill_tag(
                 let left = get_variable_in_tag(&data_ctx, &left);
                 let right = get_variable_in_tag(&data_ctx, &right);
                 if left.is_some() && right.is_some() && left.unwrap() == right.unwrap() {
-                    let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx);
+                    let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx, false);
                     filled.push_str(&replaced);
                 }
             }
@@ -922,7 +925,7 @@ fn get_general_indent(
     token_ctx: &TokenContext,
 ) -> Option<String> {
     // First in row or first item in tag will be fill indent
-    if token_ctx.first_in_row || token_ctx.in_tag && token_index == 0 {
+    if token_ctx.first_in_line || token_ctx.in_tag && token_index == 0 {
         if token_ctx.in_tag {
             get_indent_in_tag(template_bytes, &data_ctx, token_ctx)
         } else {
@@ -949,7 +952,7 @@ fn get_tag_indent(
     token_ctx: &TokenContext,
 ) -> Option<String> {
     // First in row or first item in tag will be fill indent
-    if token_ctx.first_in_row || token_ctx.in_tag && token_index == 0 {
+    if token_ctx.first_in_line || token_ctx.in_tag && token_index == 0 {
         if token_ctx.in_tag {
             let indent = get_indent_in_tag(template_bytes, &data_ctx, token_ctx);
             if let Some(indent) = indent {

@@ -1,5 +1,5 @@
 {
-  "author": "Gin",
+  "authors": ["Gin", "Gin2", "Gin3"],
   "table": {
     "name": "x_demo_table",
     "comment": "This is a template filling demo table"
