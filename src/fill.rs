@@ -135,7 +135,6 @@ struct TokenContext {
     is_indent: bool,
     /// Vec<(indent_index_start, indent_index_end)>
     indent: Option<Vec<(usize, usize)>>,
-    // TODO [T0] Tag::If表达式中变量不再需要$前缀且不再允许数字开头变量，字符串需加双引号
     // TODO [T0] [ ] 换行未正确处理，当为为空白行时（仅换行符或空白字符），原样输出；当空白行中仅含env定义，忽略该行；当空白行中仅含tag定义，忽略该行；其他情况，常规处理后输出。
     // TODO [T1] [ ] Tag 'If' Support single bool
     // TOOD [T1] [ ] Tag 'If' Support multiple bool
@@ -490,7 +489,7 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                                 }
                             }
                         }
-                        Tag::If(_, _, _) => {
+                        Tag::If(..) => {
                             let token = Token::new_tag(template_bytes, &mut ctx, tag);
                             ctx.tag_token_stack.push(token);
                         }
@@ -500,7 +499,7 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                                     &mut head_tag_token
                                 {
                                     match ext.tag {
-                                        Tag::If(_, _, _) => {
+                                        Tag::If(..) => {
                                             if let Token::Tag(end_token_ctx, ..) =
                                                 Token::new_tag(template_bytes, &mut ctx, tag)
                                             {
@@ -612,9 +611,17 @@ enum Tag {
     /// for [item] in [array]
     For(String, String),
     EndFor,
-    /// if [left] [operator] [right]
-    If(String, String, String),
+    /// if [left_type] [left] [operator] [right_type] [right]
+    If(ExpressionType, String, String, ExpressionType, String),
     EndIf,
+}
+
+#[derive(Debug)]
+enum ExpressionType {
+    VariableName,
+    String,
+    Number,
+    Boolean,
 }
 
 fn generate_tag(tag_bytes: &[u8]) -> Tag {
@@ -639,14 +646,46 @@ fn generate_tag(tag_bytes: &[u8]) -> Tag {
                 if tag_slices.len() != 4 || *tag_slices.get(2).unwrap() != "==" {
                     panic!("Illegal expression: if")
                 }
-                let exprn_left = tag_slices.get(1).unwrap().to_string();
-                let exprn_right = tag_slices.get(3).unwrap().to_string();
-                Tag::If(exprn_left, "==".to_string(), exprn_right)
+                let expression_left = tag_slices.get(1).unwrap().trim();
+                let expression_left_type = assess_expression(expression_left);
+                let expression_right = tag_slices.get(3).unwrap().trim();
+                let expression_right_type = assess_expression(expression_right);
+                Tag::If(
+                    expression_left_type,
+                    expression_left.to_owned(),
+                    "==".to_string(),
+                    expression_right_type,
+                    expression_right.to_owned(),
+                )
             } else {
                 panic!("Unsupported tag: {}", tag_text)
             }
         }
     }
+}
+
+/// Valid variable name is start with a-z or A-Z or _
+/// Valid string is wrapped in '"' (For example, "abc")
+/// Valid number is only digits (For example, 123 or 123.1)
+fn assess_expression(variable_name: &str) -> ExpressionType {
+    if variable_name == "true" || variable_name == "false" {
+        return ExpressionType::Boolean;
+    }
+    let mut chars = variable_name.chars();
+    if let Some(first) = chars.next() {
+        if first.is_alphabetic() || first == '_' || first == '$' {
+            return ExpressionType::VariableName;
+        } else if first == '"' && variable_name.len() >= 2 {
+            if let Some(last) = chars.last() {
+                if last == '"' {
+                    return ExpressionType::String;
+                }
+            }
+        } else if first.is_numeric() && variable_name.parse::<f64>().is_ok() {
+            return ExpressionType::Number;
+        }
+    }
+    panic!("Unvalid variable name: {}", variable_name)
 }
 
 struct AutoDataContext<'a> {
@@ -663,7 +702,7 @@ impl<'a> AutoDataContext<'a> {
             data,
         };
         // setting system env value
-        s.set_sys("@now", Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
+        s.set_sys("$now", Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
         // Add root scope
         s.push_scope();
         s
@@ -887,11 +926,11 @@ fn fill_tag(
     match &tag_ext.tag {
         Tag::For(item_key, array_key) => {
             if let Some(array) = data_ctx.get_array(&array_key) {
-                data_ctx.set_scope_with_string("@max", (array.len() - 1).to_string());
+                data_ctx.set_scope_with_string("$max", (array.len() - 1).to_string());
                 for i in 0..array.len() {
                     let item = array.get(i).unwrap();
                     data_ctx.push_scope();
-                    data_ctx.set_scope_with_string("@index", i.to_string());
+                    data_ctx.set_scope_with_string("$index", i.to_string());
                     data_ctx.set_scope_with_value(&item_key, item.clone());
                     let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx, true);
                     filled.push_str(&replaced);
@@ -899,10 +938,10 @@ fn fill_tag(
                 }
             }
         }
-        Tag::If(left, operator, right) => match operator.as_str() {
+        Tag::If(left_type, left, operator, right_type, right) => match operator.as_str() {
             "==" => {
-                let left = get_variable_in_tag(&data_ctx, &left);
-                let right = get_variable_in_tag(&data_ctx, &right);
+                let left = get_expression_result(&data_ctx, left_type, &left);
+                let right = get_expression_result(&data_ctx, right_type, &right);
                 if left.is_some() && right.is_some() && left.unwrap() == right.unwrap() {
                     let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx, false);
                     filled.push_str(&replaced);
@@ -1021,15 +1060,16 @@ fn bytes_to_str(bytes: &[u8], start: usize, end: usize) -> &str {
     str::from_utf8(&bytes[start..end]).expect("Convert &[u8] to &str fail")
 }
 
-fn get_variable_in_tag(data_ctx: &AutoDataContext, variable: &str) -> Option<String> {
-    if variable.len() > 1 {
-        if variable.starts_with("@") {
-            return data_ctx.get_string(&variable);
-        } else if variable.starts_with("$") {
-            return data_ctx.get_string(&variable[1..variable.len()]);
-        }
+fn get_expression_result(
+    data_ctx: &AutoDataContext,
+    expression_type: &ExpressionType,
+    expression_name: &str,
+) -> Option<String> {
+    match expression_type {
+        ExpressionType::VariableName => data_ctx.get_string(&expression_name),
+        ExpressionType::String => Some(expression_name[1..expression_name.len()].to_owned()),
+        ExpressionType::Number | ExpressionType::Boolean => Some(expression_name.to_owned()),
     }
-    Some(variable.to_string())
 }
 
 /// return (env_key, env_value)

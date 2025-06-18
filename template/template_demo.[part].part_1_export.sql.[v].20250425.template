@@ -5,7 +5,7 @@
 
 /*
 Create by {% for author in authors %}{$ join_with = , $}{{author}}{% endfor %}
-Create in {{@now}}
+Create in {{$now}}
 */
 
 -- Table {{table.name}}
@@ -21,10 +21,10 @@ CREATE TABLE {{table.name}} (
     -- Default indent_base is 'inherit', here is 'tag' because of global env define is 'tag'
     {% for field in custom_fields %}
       {$ join_with = \n $}-- After 'env' Token
-      -- @index is {{@index}}, @max is {{@max}}
+      -- $index is {{$index}}, $max is {{$max}}
       {{field.name}} {{field.type}}, -- {{field.comment}}
-      {% if   @index ==      @max %}-- [TestCase] first item in tag, should be fill the indent
-        -- ending text demo: last index is {{@index}}, max is {{@max}}
+      {% if   $index ==      $max %}-- [TestCase] first item in tag, should be fill the indent
+        -- ending text demo: last index is {{$index}}, max is {{$max}}
           -- This is test case for nested indentation
       {% endif %}
     {% endfor %}-- Text after Tag 'for', use to test token context attribute 'end_of_row'
@@ -45,3 +45,8 @@ COMMENT ON COLUMN {{table.name}}.last_name IS 'Last name';
 {% endfor %}
 COMMENT ON COLUMN {{table.name}}.created_at IS 'Created at';
 COMMENT ON COLUMN {{table.name}}.updated_at IS 'Updated at';
+
+-- Case Tag::If
+{% if "abc" == "abc" %}
+  -- Pass. "abc" == "abc" is true
+{% endif %}
