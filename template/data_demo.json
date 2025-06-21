@@ -15,5 +15,10 @@
       "type": "varchar(1000)",
       "comment": "personal address"
     }
+  ],
+  "single_line_join_fields": [
+    "aaa",
+    "bbb",
+    "ccc"
   ]
 }

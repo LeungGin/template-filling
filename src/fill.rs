@@ -12,7 +12,7 @@ pub fn fill_template(template_content: String, data: &Value) -> String {
         println!("{:?}", template_ast);
     }
     // Fill with token
-    fill(bytes, &template_ast, &mut AutoDataContext::new(data), false)
+    fill(bytes, &template_ast, &mut AutoDataContext::new(data))
 }
 
 /// Template Abstract Syntax Table
@@ -815,7 +815,6 @@ fn fill(
     template_bytes: &[u8],
     template_ast: &TemplateASTable,
     data_ctx: &mut AutoDataContext,
-    is_for_tag_fill: bool,
 ) -> String {
     for env in &template_ast.custom_envs {
         let (k, v) = get_kv_from_env_define(template_bytes, env.start, env.end);
@@ -845,23 +844,10 @@ fn fill(
                 ),
             }
         }
-        if is_for_tag_fill {
-            let join_with = data_ctx.get_string("join_with");
-            if let Some(ch) = join_with {
-                if ch == "\\n" {
-                    filled.push_str("\n");
-                } else if ch == "\\r\\n" {
-                    filled.push_str("\r\n");
-                } else {
-                    filled.push_str(&ch);
-                }
-            }
-        } else {
-            if let Some(line_feed) = &line.line_feed {
-                match line_feed {
-                    LineFeed::LF => filled.push_str("\n"),
-                    LineFeed::CRLF => filled.push_str("\r\n"),
-                }
+        if let Some(line_feed) = &line.line_feed {
+            match line_feed {
+                LineFeed::LF => filled.push_str("\n"),
+                LineFeed::CRLF => filled.push_str("\r\n"),
             }
         }
     }
@@ -925,13 +911,22 @@ fn fill_tag(
         Tag::For(item_key, array_key) => {
             if let Some(array) = data_ctx.get_array(&array_key) {
                 data_ctx.set_scope_with_string("$max", (array.len() - 1).to_string());
+                // TODO 应该在遍历前先套一层变量作用域，并赋值for的公共env，遍历时不再重复在每遍历一轮时添加公共env
+                // let join_with = get_join_with(data_ctx.get_string("join_with"));
                 for i in 0..array.len() {
                     let item = array.get(i).unwrap();
                     data_ctx.push_scope();
                     data_ctx.set_scope_with_string("$index", i.to_string());
                     data_ctx.set_scope_with_value(&item_key, item.clone());
-                    let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx, true);
+
+                    let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx);
                     filled.push_str(&replaced);
+
+                    let join_with = get_join_with(data_ctx.get_string("join_with")); // TODO
+                    if i < array.len() - 1 && join_with.is_some() {
+                        filled.push_str(join_with.as_ref().unwrap());
+                    }
+
                     data_ctx.pop_scope();
                 }
             }
@@ -941,7 +936,7 @@ fn fill_tag(
                 let left = get_expression_result(&data_ctx, left_type, &left);
                 let right = get_expression_result(&data_ctx, right_type, &right);
                 if left.is_some() && right.is_some() && left.unwrap() == right.unwrap() {
-                    let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx, false);
+                    let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx);
                     filled.push_str(&replaced);
                 }
             }
@@ -950,6 +945,14 @@ fn fill_tag(
         _ => panic!("An impossible error when parse tag token"),
     }
     data_ctx.pop_scope();
+}
+
+fn get_join_with(join_with_str: Option<String>) -> Option<String> {
+    join_with_str.map(|ch| match ch.as_str() {
+        "\\n" => "\n".to_owned(),
+        "\\r\\n" => "\r\n".to_owned(),
+        _ => ch,
+    })
 }
 
 fn get_general_indent(
