@@ -1065,7 +1065,7 @@ fn get_expression_result(
 ) -> Option<String> {
     match expression_type {
         ExpressionType::VariableName => data_ctx.get_string(&expression_name),
-        ExpressionType::String => Some(expression_name[1..expression_name.len()].to_owned()),
+        ExpressionType::String => Some(expression_name[1..expression_name.len() - 1].to_owned()),
         ExpressionType::Number | ExpressionType::Boolean => Some(expression_name.to_owned()),
     }
 }
