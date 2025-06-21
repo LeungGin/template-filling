@@ -234,7 +234,7 @@ impl Token {
 }
 
 struct GenerateTokensContext {
-    pub last_pos: usize,
+    pub last_start_pos: usize,
     pub template_ast: TemplateASTable,
 
     // <<< Keep coding, time will reward --- 2025/5/22 1:01 >>>
@@ -255,7 +255,7 @@ struct GenerateTokensContext {
 impl<'a> GenerateTokensContext {
     fn new() -> Self {
         Self {
-            last_pos: 0,
+            last_start_pos: 0,
             template_ast: TemplateASTable::new(),
             now_in_raw: false,
             now_has_first_non_blank: false,
@@ -433,7 +433,7 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                     let (_, start_idx) = ctx.head_symbol_stack.pop().unwrap();
                     let token = Token::new_text(template_bytes, &mut ctx, start_idx, i);
                     ctx.push_token(token);
-                    ctx.last_pos = i + 2;
+                    ctx.last_start_pos = i + 2;
                 }
                 i += 2;
                 ctx.now_in_raw = false;
@@ -446,14 +446,14 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
 
         match (&bytes[i], &bytes[i + 1]) {
             (b'{', b'%') => {
-                if ctx.last_pos < i {
-                    let last_pos = ctx.last_pos;
+                if ctx.last_start_pos < i {
+                    let last_pos = ctx.last_start_pos;
                     let token = Token::new_text(template_bytes, &mut ctx, last_pos, i);
                     ctx.push_token(token);
-                    ctx.last_pos = i;
+                    ctx.last_start_pos = i;
                 }
                 ctx.head_symbol_stack.push((Symbol::Logical, i + 2));
-                ctx.last_pos += 2;
+                ctx.last_start_pos += 2;
                 i += 2;
             }
             (b'%', b'}') => {
@@ -516,19 +516,19 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                             }
                         }
                     }
-                    ctx.last_pos = i + 2;
+                    ctx.last_start_pos = i + 2;
                 }
                 i += 2;
             }
             (b'{', b'$') => {
-                if ctx.last_pos < i {
-                    let last_pos = ctx.last_pos;
+                if ctx.last_start_pos < i {
+                    let last_pos = ctx.last_start_pos;
                     let token = Token::new_text(template_bytes, &mut ctx, last_pos, i);
                     ctx.push_token(token);
-                    ctx.last_pos = i;
+                    ctx.last_start_pos = i;
                 }
                 ctx.head_symbol_stack.push((Symbol::Env, i + 2));
-                ctx.last_pos += 2;
+                ctx.last_start_pos += 2;
                 i += 2;
             }
             (b'$', b'}') => {
@@ -539,19 +539,19 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                     }
                     let env = EnvDefine::new(start_idx, i);
                     ctx.push_env(env);
-                    ctx.last_pos = i + 2;
+                    ctx.last_start_pos = i + 2;
                 }
                 i += 2;
             }
             (b'{', b'{') => {
-                if ctx.last_pos < i {
-                    let last_pos = ctx.last_pos;
+                if ctx.last_start_pos < i {
+                    let last_pos = ctx.last_start_pos;
                     let token = Token::new_text(template_bytes, &mut ctx, last_pos, i);
                     ctx.push_token(token);
-                    ctx.last_pos = i;
+                    ctx.last_start_pos = i;
                 }
                 ctx.head_symbol_stack.push((Symbol::Placeholder, i + 2));
-                ctx.last_pos += 2;
+                ctx.last_start_pos += 2;
                 i += 2;
             }
             (b'}', b'}') => {
@@ -559,48 +559,46 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                     let (_, start_idx) = ctx.head_symbol_stack.pop().unwrap();
                     let token = Token::new_placeholder(template_bytes, &mut ctx, start_idx, i);
                     ctx.push_token(token);
-                    ctx.last_pos = i + 2;
+                    ctx.last_start_pos = i + 2;
                 }
                 i += 2;
             }
             (b'{', b'#') => {
-                if ctx.last_pos < i {
-                    let last_pos = ctx.last_pos;
+                if ctx.last_start_pos < i {
+                    let last_pos = ctx.last_start_pos;
                     let token = Token::new_text(template_bytes, &mut ctx, last_pos, i);
                     ctx.push_token(token);
-                    ctx.last_pos = i;
+                    ctx.last_start_pos = i;
                 }
                 ctx.now_in_raw = true;
                 ctx.head_symbol_stack.push((Symbol::Raw, i + 2));
-                ctx.last_pos += 2;
+                ctx.last_start_pos += 2;
                 i += 2;
             }
             (b'\r', b'\n') => {
-                let last_pos = ctx.last_pos;
-                if last_pos + 2 < i + 1 {
-                    // No just line feed
-                    let token = Token::new_text(template_bytes, &mut ctx, last_pos, i);
+                let last_start_pos = ctx.last_start_pos;
+                if last_start_pos < i {
+                    let token = Token::new_text(template_bytes, &mut ctx, last_start_pos, i);
                     ctx.push_token(token);
                 }
                 ctx.new_line(LineFeed::CRLF);
-                ctx.last_pos = i + 2;
+                ctx.last_start_pos = i + 2;
                 i += 2;
             }
             (b'\n', _) => {
-                let last_pos = ctx.last_pos;
-                if last_pos + 1 < i {
-                    // No just line feed
-                    let token = Token::new_text(template_bytes, &mut ctx, last_pos, i);
+                let last_start_pos = ctx.last_start_pos;
+                if last_start_pos < i {
+                    let token = Token::new_text(template_bytes, &mut ctx, last_start_pos, i);
                     ctx.push_token(token);
                 }
                 ctx.new_line(LineFeed::LF);
-                ctx.last_pos = i + 1;
+                ctx.last_start_pos = i + 1;
                 i += 1;
             }
             _ => i += 1,
         }
     }
-    let last_pos = ctx.last_pos;
+    let last_pos = ctx.last_start_pos;
     let token = Token::new_text(template_bytes, &mut ctx, last_pos, bytes.len());
     ctx.push_token(token);
     ctx.template_ast
