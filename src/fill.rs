@@ -938,17 +938,25 @@ fn fill_tag(
                 }
             }
         }
-        Tag::If(left_type, left, operator, right_type, right) => match operator.as_str() {
-            "==" => {
-                let left = get_expression_result(&data_ctx, left_type, &left);
-                let right = get_expression_result(&data_ctx, right_type, &right);
-                if left.is_some() && right.is_some() && left.unwrap() == right.unwrap() {
-                    let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx, true);
-                    filled.push_str(&replaced);
+        Tag::If(left_type, left, operator, right_type, right) => {
+            let left = get_expression_result(&data_ctx, left_type, &left);
+            let right = get_expression_result(&data_ctx, right_type, &right);
+            match operator.as_str() {
+                "==" => {
+                    if left.is_some() && right.is_some() && left.unwrap() == right.unwrap() {
+                        let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx, true);
+                        filled.push_str(&replaced);
+                    }
                 }
+                "!=" => {
+                    if left.is_none() || right.is_none() || left.unwrap() != right.unwrap() {
+                        let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx, true);
+                        filled.push_str(&replaced);
+                    }
+                }
+                _ => panic!("Unsupported if's operator: {}", operator),
             }
-            _ => panic!("Unsupported if's operator: {}", operator),
-        },
+        }
         _ => panic!("An impossible error when parse tag token"),
     }
     data_ctx.pop_scope();
