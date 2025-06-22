@@ -12,7 +12,7 @@ pub fn fill_template(template_content: String, data: &Value) -> String {
         println!("{:?}", template_ast);
     }
     // Fill with token
-    fill(bytes, &template_ast, &mut AutoDataContext::new(data))
+    fill(bytes, &template_ast, &mut AutoDataContext::new(data), true)
 }
 
 /// Template Abstract Syntax Table
@@ -815,10 +815,13 @@ fn fill(
     template_bytes: &[u8],
     template_ast: &TemplateASTable,
     data_ctx: &mut AutoDataContext,
+    is_set_env: bool,
 ) -> String {
-    for env in &template_ast.custom_envs {
-        let (k, v) = get_kv_from_env_define(template_bytes, env.start, env.end);
-        data_ctx.set_scope_with_string(k, v.to_owned());
+    if is_set_env {
+        for env in &template_ast.custom_envs {
+            let (k, v) = get_kv_from_env_define(template_bytes, env.start, env.end);
+            data_ctx.set_scope_with_string(k, v.to_owned());
+        }
     }
 
     let mut filled = String::new();
@@ -910,23 +913,27 @@ fn fill_tag(
     match &tag_ext.tag {
         Tag::For(item_key, array_key) => {
             if let Some(array) = data_ctx.get_array(&array_key) {
+                // Set Tag::For public env variables
                 data_ctx.set_scope_with_string("$max", (array.len() - 1).to_string());
-                // TODO 应该在遍历前先套一层变量作用域，并赋值for的公共env，遍历时不再重复在每遍历一轮时添加公共env
-                // let join_with = get_join_with(data_ctx.get_string("join_with"));
+                for env in &tag_ext.sub_ast.custom_envs {
+                    let (k, v) = get_kv_from_env_define(template_bytes, env.start, env.end);
+                    data_ctx.set_scope_with_string(k, v.to_owned());
+                }
+                // Polling processing
+                let join_with = get_join_with(data_ctx.get_string("join_with"));
                 for i in 0..array.len() {
-                    let item = array.get(i).unwrap();
+                    // The scope of variables for each polling
                     data_ctx.push_scope();
                     data_ctx.set_scope_with_string("$index", i.to_string());
+                    let item = array.get(i).unwrap();
                     data_ctx.set_scope_with_value(&item_key, item.clone());
 
-                    let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx);
+                    let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx, false);
                     filled.push_str(&replaced);
 
-                    let join_with = get_join_with(data_ctx.get_string("join_with")); // TODO
                     if i < array.len() - 1 && join_with.is_some() {
                         filled.push_str(join_with.as_ref().unwrap());
                     }
-
                     data_ctx.pop_scope();
                 }
             }
@@ -936,7 +943,7 @@ fn fill_tag(
                 let left = get_expression_result(&data_ctx, left_type, &left);
                 let right = get_expression_result(&data_ctx, right_type, &right);
                 if left.is_some() && right.is_some() && left.unwrap() == right.unwrap() {
-                    let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx);
+                    let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx, true);
                     filled.push_str(&replaced);
                 }
             }

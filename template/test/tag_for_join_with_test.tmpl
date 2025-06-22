@@ -1,0 +1,17 @@
+-- Case 1.1: Single field fill on one line
+{% for field in single_field_fill_on_one_line_fields %}{$ join_with = , $}{{field}}{% endfor %}
+
+-- Case 1.2: Single field fill on one line (Other ways to define)
+{% for field in single_field_fill_on_one_line_fields %}
+  {$ join_with = , $}
+  {{field}}
+{% endfor %}
+
+-- Case 2.1: Single field fill on multiple lines
+{% for field in single_field_fill_on_multiple_line_fields %}{$ join_with = \n $}{{field}}{% endfor %}
+
+-- Case 2.2: Single field fill on multiple lines (Other ways to define)
+{% for field in single_field_fill_on_multiple_line_fields %}
+  {$ join_with = \n $}
+  {{field}}
+{% endfor %}

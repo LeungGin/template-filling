@@ -1,0 +1,8 @@
+{
+  "Case 1.x: Single field fill on one line": {
+    "single_field_fill_on_one_line_fields": ["aaa", "bbb", "ccc"]
+  },
+  "Case 2.x: Single field fill on multiple lines": {
+    "single_field_fill_on_multiple_line_fields": ["aaa", "bbb", "ccc"]
+  }
+}
