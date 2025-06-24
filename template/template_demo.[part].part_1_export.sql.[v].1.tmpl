@@ -54,3 +54,22 @@ COMMENT ON COLUMN {{table.name}}.updated_at IS 'Updated at';
 
 -- Single line join
 {% for field in single_line_join_fields %}{$ join_with = , $}{{field}}{% endfor %}
+
+{% if true %}
+  [Pass] Tag::If single boolean condition
+{% endif %}
+{% if false %}
+  [Fail] Tag::If single boolean condition
+{% endif %}
+{% if single_boolean_condition_true %}
+  [Pass] Tag::If single boolean variable condition
+{% endif %}
+{% if single_boolean_condition_false %}
+  [Fail] Tag::If single boolean variable condition
+{% endif %}
+{% if "abc" == "abc" %}
+  [Pass] Tag::If "A" == "B" condition
+{% endif %}
+{% if "abc" == "123" %}
+  [Fail] Tag::If "A" == "B" condition
+{% endif %}

@@ -20,5 +20,7 @@
     "aaa",
     "bbb",
     "ccc"
-  ]
+  ],
+  "single_boolean_condition_true": true,
+  "single_boolean_condition_false": false
 }

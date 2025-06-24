@@ -135,16 +135,6 @@ struct TokenContext {
     is_indent: bool,
     /// Vec<(indent_index_start, indent_index_end)>
     indent: Option<Vec<(usize, usize)>>,
-    // TODO [T0] [ ] 换行未正确处理，当为为空白行时（仅换行符或空白字符），原样输出；当空白行中仅含env定义，忽略该行；当空白行中仅含tag定义，忽略该行；其他情况，常规处理后输出。
-    // TODO [T1] [ ] Tag 'If' Support single bool
-    // TOOD [T1] [ ] Tag 'If' Support multiple bool
-    // TODO [T1] [ ] 模版文件使用\r\n作为换行符时，会导致start序号错误，一般提示使用了len的长度作为start的值
-    // TODO [T1] [ ] 模版为空时会导致start的值错误取到usize的最大值
-    // TODO [T2] [ ] 冗余代码重构
-    // TODO [T2] [ ] 无用换行问题
-    // TODO [T2] [ ] tag类token没有记录start和end，默认应该记录head的start和end，然后可以考虑添加属性记录tail的start和end
-    // TODO [T2] [ ] Token support multiple row define
-    // TODO [T3] [ ] 当无缩进时indent属性应设为None，而非Some([])
 }
 
 impl TokenContext {
@@ -614,7 +604,7 @@ enum Tag {
     EndIf,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum ExpressionType {
     VariableName,
     String,
@@ -641,20 +631,38 @@ fn generate_tag(tag_bytes: &[u8]) -> Tag {
                 Tag::For(item_name, collect_name)
             } else if tag_text.starts_with("if ") {
                 let tag_slices: Vec<&str> = tag_text.splitn(4, ' ').collect();
-                if tag_slices.len() != 4 || *tag_slices.get(2).unwrap() != "==" {
+                if tag_slices.len() == 2 {
+                    let expression = tag_slices.get(1).unwrap().trim();
+                    let expression_type = assess_expression(expression);
+                    if expression_type != ExpressionType::VariableName
+                        && expression_type != ExpressionType::Boolean
+                    {
+                        panic!("Illegal expression: if")
+                    }
+                    Tag::If(
+                        expression_type,
+                        expression.to_owned(),
+                        "==".to_string(),
+                        ExpressionType::Boolean,
+                        "true".to_owned(),
+                    )
+                } else if tag_slices.len() == 4
+                    && (*tag_slices.get(2).unwrap() == "==" || *tag_slices.get(2).unwrap() == "!=")
+                {
+                    let expression_left = tag_slices.get(1).unwrap().trim();
+                    let expression_left_type = assess_expression(expression_left);
+                    let expression_right = tag_slices.get(3).unwrap().trim();
+                    let expression_right_type = assess_expression(expression_right);
+                    Tag::If(
+                        expression_left_type,
+                        expression_left.to_owned(),
+                        tag_slices.get(2).unwrap().to_string(),
+                        expression_right_type,
+                        expression_right.to_owned(),
+                    )
+                } else {
                     panic!("Illegal expression: if")
                 }
-                let expression_left = tag_slices.get(1).unwrap().trim();
-                let expression_left_type = assess_expression(expression_left);
-                let expression_right = tag_slices.get(3).unwrap().trim();
-                let expression_right_type = assess_expression(expression_right);
-                Tag::If(
-                    expression_left_type,
-                    expression_left.to_owned(),
-                    "==".to_string(),
-                    expression_right_type,
-                    expression_right.to_owned(),
-                )
             } else {
                 panic!("Unsupported tag: {}", tag_text)
             }
@@ -911,8 +919,8 @@ fn fill_tag(
     }
 
     match &tag_ext.tag {
-        Tag::For(item_key, array_key) => {
-            if let Some(array) = data_ctx.get_array(&array_key) {
+        Tag::For(item_name, array_name) => {
+            if let Some(array) = data_ctx.get_array(&array_name) {
                 // Set Tag::For public env variables
                 data_ctx.set_scope_with_string("$max", (array.len() - 1).to_string());
                 for env in &tag_ext.sub_ast.custom_envs {
@@ -926,7 +934,7 @@ fn fill_tag(
                     data_ctx.push_scope();
                     data_ctx.set_scope_with_string("$index", i.to_string());
                     let item = array.get(i).unwrap();
-                    data_ctx.set_scope_with_value(&item_key, item.clone());
+                    data_ctx.set_scope_with_value(&item_name, item.clone());
 
                     let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx, false);
                     filled.push_str(&replaced);
