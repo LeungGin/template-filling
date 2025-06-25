@@ -264,7 +264,7 @@ impl<'a> GenerateTokensContext {
     ) -> Token {
         match token {
             Token::Text(ref mut token_ctx) => {
-                // is break raw text
+                // Is line feed char
                 if template_bytes[token_ctx.end - 1] == b'\n' {
                     // text just is break symbol (\n or \r\n)
                     if template_bytes[token_ctx.start] == b'\n'
@@ -588,9 +588,11 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
             _ => i += 1,
         }
     }
-    let last_pos = ctx.last_start_pos;
-    let token = Token::new_text(template_bytes, &mut ctx, last_pos, bytes.len());
-    ctx.push_token(token);
+    if ctx.last_start_pos < bytes.len() {
+        let last_start_pos = ctx.last_start_pos;
+        let token = Token::new_text(template_bytes, &mut ctx, last_start_pos, bytes.len());
+        ctx.push_token(token);
+    }
     ctx.template_ast
 }
 
