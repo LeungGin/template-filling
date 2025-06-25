@@ -101,6 +101,12 @@ impl SyntaxLine {
             line_feed: None,
         }
     }
+
+    pub fn is_content_line(&self) -> bool {
+        self.text_token_cnt > 0
+            || self.placeholder_token_cnt > 0
+            || self.env_define_cnt == 0 && self.tag_token_cnt == 0
+    }
 }
 
 #[derive(Debug)]
@@ -857,10 +863,12 @@ fn fill(
                 ),
             }
         }
-        if let Some(line_feed) = &line.line_feed {
-            match line_feed {
-                LineFeed::LF => filled.push_str("\n"),
-                LineFeed::CRLF => filled.push_str("\r\n"),
+        if line.is_content_line() {
+            if let Some(line_feed) = &line.line_feed {
+                match line_feed {
+                    LineFeed::LF => filled.push_str("\n"),
+                    LineFeed::CRLF => filled.push_str("\r\n"),
+                }
             }
         }
     }
