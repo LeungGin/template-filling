@@ -89,7 +89,7 @@ impl TemplateASTable {
 
     pub fn finish_build(&mut self) {
         if let Some(current_line) = self.current_line.take() {
-            if self.syntax_lines.len() > 0 || current_line.tokens.len() > 0 {
+            if current_line.tokens.len() > 0 {
                 self.syntax_lines.push(current_line);
             }
         }
@@ -423,7 +423,7 @@ impl<'a> GenerateTokensContext {
     }
 
     /// When line is break, should run this function to reset line status and new line
-    pub fn new_line(&mut self, current_line_feed: LineFeed) {
+    pub fn new_line(&mut self, current_line_feed: Option<LineFeed>) {
         // Reset line status record
         self.now_has_first_non_blank = false;
         self.indent_in_line.clear();
@@ -432,12 +432,12 @@ impl<'a> GenerateTokensContext {
             if let Token::Tag(_, TagExtend { sub_ast, .. }) =
                 self.tag_token_stack.last_mut().unwrap()
             {
-                sub_ast.new_line(Some(current_line_feed));
+                sub_ast.new_line(current_line_feed);
             } else {
                 panic!("An impossible error when push token")
             }
         } else {
-            self.template_ast.new_line(Some(current_line_feed));
+            self.template_ast.new_line(current_line_feed);
         }
     }
 
@@ -496,7 +496,11 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                             if let Some(mut head_tag_token) = ctx.tag_token_stack.pop() {
                                 if let Token::Tag(
                                     ref mut head_token_ctx,
-                                    TagExtend { tag: head_tag, .. },
+                                    TagExtend {
+                                        tag: head_tag,
+                                        sub_ast,
+                                        ..
+                                    },
                                 ) = &mut head_tag_token
                                 {
                                     match head_tag {
@@ -506,6 +510,7 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                                             {
                                                 head_token_ctx.end_of_line =
                                                     end_token_ctx.end_of_line;
+                                                sub_ast.finish_build();
                                                 ctx.push_token(head_tag_token);
                                             }
                                         }
@@ -522,16 +527,23 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                         }
                         Tag::EndIf => {
                             if let Some(mut head_tag_token) = ctx.tag_token_stack.pop() {
-                                if let Token::Tag(ref mut head_token_ctx, ref ext) =
-                                    &mut head_tag_token
+                                if let Token::Tag(
+                                    ref mut head_token_ctx,
+                                    TagExtend {
+                                        tag: head_tag,
+                                        sub_ast,
+                                        ..
+                                    },
+                                ) = &mut head_tag_token
                                 {
-                                    match ext.tag {
+                                    match head_tag {
                                         Tag::If(..) => {
                                             if let Token::Tag(end_token_ctx, ..) =
                                                 Token::new_tag(template_bytes, &mut ctx, tag)
                                             {
                                                 head_token_ctx.end_of_line =
                                                     end_token_ctx.end_of_line;
+                                                sub_ast.finish_build();
                                                 ctx.push_token(head_tag_token);
                                             }
                                         }
@@ -608,7 +620,7 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                     let token = Token::new_text(template_bytes, &mut ctx, last_start_pos, i);
                     ctx.push_token(token);
                 }
-                ctx.new_line(LineFeed::CRLF);
+                ctx.new_line(Some(LineFeed::CRLF));
                 ctx.last_start_pos = i + 2;
                 i += 2;
             }
@@ -618,7 +630,7 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                     let token = Token::new_text(template_bytes, &mut ctx, last_start_pos, i);
                     ctx.push_token(token);
                 }
-                ctx.new_line(LineFeed::LF);
+                ctx.new_line(Some(LineFeed::LF));
                 ctx.last_start_pos = i + 1;
                 i += 1;
             }
@@ -629,6 +641,7 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
         let last_start_pos = ctx.last_start_pos;
         let token = Token::new_text(template_bytes, &mut ctx, last_start_pos, bytes.len());
         ctx.push_token(token);
+        ctx.new_line(None);
     }
     ctx.template_ast
 }
@@ -1002,7 +1015,7 @@ fn fill_tag(
                     let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx, true, false);
                     filled.push_str(&replaced);
 
-                    if i < array.len() - 1 && join_with.is_some() {
+                    if join_with.is_some() && i < array.len() - 1 {
                         filled.push_str(join_with.as_ref().unwrap());
                     }
                     data_ctx.pop_scope();
