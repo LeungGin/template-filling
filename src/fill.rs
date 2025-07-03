@@ -1,6 +1,7 @@
 use std::{cell::RefCell, collections::HashMap, mem, rc::Rc, str};
 
 use chrono::Local;
+use serde::Serialize;
 use serde_json::{json, Value};
 
 pub fn fill_template(template_content: String, data: &Value) -> String {
@@ -9,38 +10,49 @@ pub fn fill_template(template_content: String, data: &Value) -> String {
     let template_ast = generate_tokens(bytes);
     // debug
     if cfg!(debug_assertions) {
+        // println!("{}", serde_json::to_string(&template_ast).unwrap());
         println!("{:?}", template_ast);
     }
     // Fill with token
-    fill(bytes, &template_ast, &mut AutoDataContext::new(data), true)
+    fill(
+        bytes,
+        &template_ast,
+        &mut AutoDataContext::new(data),
+        false,
+        true,
+    )
 }
 
 /// Template Abstract Syntax Table
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct TemplateASTable {
+    current_line: Option<SyntaxLine>,
     custom_envs: Vec<EnvDefine>,
     syntax_lines: Vec<SyntaxLine>,
+    is_tag: bool,
 }
 
 impl TemplateASTable {
-    pub fn new() -> Self {
+    pub fn new(is_tag: bool) -> Self {
         let mut sf = Self {
+            current_line: None,
             custom_envs: Vec::new(),
             syntax_lines: Vec::new(),
+            is_tag,
         };
         sf.new_line(None);
         sf
     }
 
     pub fn push_env(&mut self, env_define: EnvDefine) {
-        let line = self.syntax_lines.last_mut().expect("No line can be found");
+        let line = self.current_line.as_mut().expect("No line can be found");
         line.env_define_cnt += 1;
 
         self.custom_envs.push(env_define);
     }
 
     pub fn push_token(&mut self, token: Token) {
-        let line = self.syntax_lines.last_mut().expect("No line can be found");
+        let line = self.current_line.as_mut().expect("No line can be found");
         // Record indent
         if let Token::Text(TokenContext { is_indent, .. }, ..) = &token {
             if *is_indent {
@@ -58,21 +70,33 @@ impl TemplateASTable {
     }
 
     pub fn last_token_mut(&mut self) -> Option<&mut Token> {
-        let line = self.syntax_lines.last_mut().expect("No line can be found");
+        let line = self.current_line.as_mut().expect("No line can be found");
         line.tokens.last_mut()
     }
 
     /// Execute this function when line finished
     pub fn new_line(&mut self, currnet_line_line_feed: Option<LineFeed>) {
-        if let Some(line) = self.syntax_lines.last_mut() {
-            line.line_feed = currnet_line_line_feed;
+        // push last line
+        if let Some(mut current_line) = self.current_line.take() {
+            if self.syntax_lines.len() > 0 || current_line.tokens.len() > 0 {
+                current_line.line_feed = currnet_line_line_feed;
+                self.syntax_lines.push(current_line);
+            }
         }
+        // new line
+        self.current_line = Some(SyntaxLine::new());
+    }
 
-        self.syntax_lines.push(SyntaxLine::new());
+    pub fn finish_build(&mut self) {
+        if let Some(current_line) = self.current_line.take() {
+            if self.syntax_lines.len() > 0 || current_line.tokens.len() > 0 {
+                self.syntax_lines.push(current_line);
+            }
+        }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct SyntaxLine {
     pub tokens: Vec<Token>,
     pub env_define_cnt: usize,
@@ -82,7 +106,7 @@ struct SyntaxLine {
     pub line_feed: Option<LineFeed>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 enum LineFeed {
     /// \n
     LF,
@@ -102,10 +126,13 @@ impl SyntaxLine {
         }
     }
 
-    pub fn is_content_line(&self) -> bool {
-        self.text_token_cnt > 0
-            || self.placeholder_token_cnt > 0
-            || self.env_define_cnt == 0 && self.tag_token_cnt == 0
+    pub fn visible_token_count(&self) -> usize {
+        self.text_token_cnt + self.placeholder_token_cnt + self.tag_token_cnt
+    }
+
+    pub fn should_fill_line_feed(&self) -> bool {
+        // Will not fill line feed when only Token::Env in line
+        self.visible_token_count() > 0 || self.env_define_cnt == 0
     }
 }
 
@@ -117,7 +144,7 @@ enum Symbol {
     Raw,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct EnvDefine {
     start: usize,
     end: usize,
@@ -129,7 +156,7 @@ impl EnvDefine {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct TokenContext {
     start: usize,
     end: usize,
@@ -157,14 +184,14 @@ impl TokenContext {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 struct TagExtend {
     tag: Tag,
     sub_ast: TemplateASTable,
     sub_token_min_indent_len: Option<usize>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 enum Token {
     Text(TokenContext),
     Placeholder(TokenContext),
@@ -221,7 +248,7 @@ impl Token {
             },
             TagExtend {
                 tag,
-                sub_ast: TemplateASTable::new(),
+                sub_ast: TemplateASTable::new(true),
                 sub_token_min_indent_len: None,
             },
         );
@@ -252,7 +279,7 @@ impl<'a> GenerateTokensContext {
     fn new() -> Self {
         Self {
             last_start_pos: 0,
-            template_ast: TemplateASTable::new(),
+            template_ast: TemplateASTable::new(false),
             now_in_raw: false,
             now_has_first_non_blank: false,
             indent_in_line: Vec::new(),
@@ -346,7 +373,7 @@ impl<'a> GenerateTokensContext {
         }
     }
 
-    pub fn push_token(&mut self, token: Token) {
+    pub fn push_token(&mut self, mut token: Token) {
         if self.now_in_tag() {
             if let Token::Tag(
                 _,
@@ -357,6 +384,10 @@ impl<'a> GenerateTokensContext {
                 },
             ) = self.tag_token_stack.last_mut().unwrap()
             {
+                // Finish Token::Tag line build
+                if let Token::Tag(_, TagExtend { sub_ast, .. }) = &mut token {
+                    sub_ast.finish_build();
+                }
                 // Record the min indent len
                 match &token {
                     Token::Placeholder(token_ctx)
@@ -602,7 +633,7 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
     ctx.template_ast
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize)]
 enum Tag {
     /// for [item] in [array]
     For(String, String),
@@ -612,7 +643,7 @@ enum Tag {
     EndIf,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Serialize)]
 enum ExpressionType {
     VariableName,
     String,
@@ -831,22 +862,26 @@ fn fill(
     template_bytes: &[u8],
     template_ast: &TemplateASTable,
     data_ctx: &mut AutoDataContext,
-    is_set_env: bool,
+    is_tag_fill: bool,
+    is_need_set_env: bool,
 ) -> String {
-    if is_set_env {
+    if is_need_set_env {
         for env in &template_ast.custom_envs {
             let (k, v) = get_kv_from_env_define(template_bytes, env.start, env.end);
             data_ctx.set_scope_with_string(k, v.to_owned());
         }
     }
 
+    // Fill each line
     let mut filled = String::new();
-    for line in &template_ast.syntax_lines {
+    for (line_idx, line) in template_ast.syntax_lines.iter().enumerate() {
+        // Fill token in line
+        let mut filled_count = 0;
         for (token_idx, token) in line.tokens.iter().enumerate() {
             // 以下规则TODO：
             // 1、如果第一个token是Tag且第一个非Tag Token前进行过换行，则第一个非Tag Token前填充第一个Tag Token的indent
             // 2、如果第一个token是Tag且第一个非Tag Token前未进行过换行，且第一个非Tag Token前未发生任何填充，则第一个非Tag Token前填充第一个Tag Token的indent
-            match token {
+            let is_filled = match token {
                 Token::Text(token_ctx) => {
                     fill_text(&mut filled, template_bytes, token_idx, data_ctx, token_ctx)
                 }
@@ -861,9 +896,21 @@ fn fill(
                     token_ctx,
                     ext,
                 ),
+            };
+            if is_filled {
+                filled_count += 1;
             }
         }
-        if line.is_content_line() {
+        // No line feed fill: only Token::Tag in line (No contains tag's sub token) and no content be filled
+        if line.visible_token_count() == 1 && line.tag_token_cnt > 0 && filled_count == 0 {
+            continue;
+        }
+        // No line feed fill: Token::Tag's last sub token
+        if is_tag_fill && line_idx == template_ast.syntax_lines.len() - 1 {
+            continue;
+        }
+        // Fill line feed
+        if line.should_fill_line_feed() {
             if let Some(line_feed) = &line.line_feed {
                 match line_feed {
                     LineFeed::LF => filled.push_str("\n"),
@@ -875,27 +922,30 @@ fn fill(
     filled
 }
 
+/// @return Content be filled or not
 fn fill_text(
     filled: &mut String,
     template_bytes: &[u8],
     token_idx: usize,
     data_ctx: &mut AutoDataContext,
     token_ctx: &TokenContext,
-) {
+) -> bool {
     let indent = get_general_indent(template_bytes, token_idx, data_ctx, token_ctx);
     if let Some(indent) = &indent {
         filled.push_str(indent);
     }
     filled.push_str(bytes_to_str(template_bytes, token_ctx.start, token_ctx.end));
+    true
 }
 
+/// @return Content be filled or not
 fn fill_placeholder(
     filled: &mut String,
     template_bytes: &[u8],
     token_idx: usize,
     data_ctx: &mut AutoDataContext,
     token_ctx: &TokenContext,
-) {
+) -> bool {
     let indent = get_general_indent(template_bytes, token_idx, data_ctx, token_ctx);
     if let Some(indent) = &indent {
         filled.push_str(indent);
@@ -907,8 +957,10 @@ fn fill_placeholder(
         None => format!("{{{{{}: Not found}}}}", placeholder),
     };
     filled.push_str(&replaced);
+    true
 }
 
+/// @return Content be filled or not
 fn fill_tag(
     filled: &mut String,
     template_bytes: &[u8],
@@ -916,7 +968,7 @@ fn fill_tag(
     data_ctx: &mut AutoDataContext,
     token_ctx: &TokenContext,
     tag_ext: &TagExtend,
-) {
+) -> bool {
     data_ctx.push_scope();
     data_ctx.set_scope_with_string(
         "tag_sub_min_indent_len",
@@ -928,6 +980,7 @@ fn fill_tag(
         filled.push_str(indent);
     }
 
+    let before_fill_len = filled.len();
     match &tag_ext.tag {
         Tag::For(item_name, array_name) => {
             if let Some(array) = data_ctx.get_array(&array_name) {
@@ -946,7 +999,7 @@ fn fill_tag(
                     let item = array.get(i).unwrap();
                     data_ctx.set_scope_with_value(&item_name, item.clone());
 
-                    let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx, false);
+                    let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx, true, false);
                     filled.push_str(&replaced);
 
                     if i < array.len() - 1 && join_with.is_some() {
@@ -962,13 +1015,13 @@ fn fill_tag(
             match operator.as_str() {
                 "==" => {
                     if left.is_some() && right.is_some() && left.unwrap() == right.unwrap() {
-                        let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx, true);
+                        let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx, true, true);
                         filled.push_str(&replaced);
                     }
                 }
                 "!=" => {
                     if left.is_none() || right.is_none() || left.unwrap() != right.unwrap() {
-                        let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx, true);
+                        let replaced = fill(template_bytes, &tag_ext.sub_ast, data_ctx, true, true);
                         filled.push_str(&replaced);
                     }
                 }
@@ -978,6 +1031,8 @@ fn fill_tag(
         _ => panic!("An impossible error when parse tag token"),
     }
     data_ctx.pop_scope();
+    // Content be filled or not
+    filled.len() > before_fill_len
 }
 
 fn get_join_with(join_with_str: Option<String>) -> Option<String> {
