@@ -54,6 +54,8 @@ COMMENT ON COLUMN {{table.name}}.updated_at IS 'Updated at';
 
 -- Single line join
 {% for field in single_line_join_fields %}{$ join_with = , $}{{field}}{% endfor %}
+-- Mixed char and line feed join
+{% for field in single_line_join_fields %}{$ join_with = ,\n $}{{field}}{% endfor %}
 
 {% if true %}
   [Pass] Tag::If single boolean condition

@@ -4,11 +4,13 @@ use chrono::Local;
 use serde::Serialize;
 use serde_json::{json, Value};
 
+use crate::tpd::unicode_escape;
+
 pub fn fill_template(template_content: String, data: &Value) -> String {
     // Generate tokens
     let bytes = template_content.as_bytes();
     let template_ast = generate_tokens(bytes);
-    // debug
+    // Debug
     if cfg!(debug_assertions) {
         // println!("{}", serde_json::to_string(&template_ast).unwrap());
         println!("{:?}", template_ast);
@@ -881,7 +883,9 @@ fn fill(
     if is_need_set_env {
         for env in &template_ast.custom_envs {
             let (k, v) = get_kv_from_env_define(template_bytes, env.start, env.end);
-            data_ctx.set_scope_with_string(k, v.to_owned());
+            if let Some(decoded_v) = unicode_escape(v) {
+                data_ctx.set_scope_with_string(k, decoded_v);
+            }
         }
     }
 
@@ -1001,10 +1005,12 @@ fn fill_tag(
                 data_ctx.set_scope_with_string("$max", (array.len() - 1).to_string());
                 for env in &tag_ext.sub_ast.custom_envs {
                     let (k, v) = get_kv_from_env_define(template_bytes, env.start, env.end);
-                    data_ctx.set_scope_with_string(k, v.to_owned());
+                    if let Some(decoded_v) = unicode_escape(v) {
+                        data_ctx.set_scope_with_string(k, decoded_v);
+                    }
                 }
                 // Polling processing
-                let join_with = get_join_with(data_ctx.get_string("join_with"));
+                let join_with = data_ctx.get_string("join_with");
                 for i in 0..array.len() {
                     // The scope of variables for each polling
                     data_ctx.push_scope();
@@ -1048,12 +1054,17 @@ fn fill_tag(
     filled.len() > before_fill_len
 }
 
-fn get_join_with(join_with_str: Option<String>) -> Option<String> {
-    join_with_str.map(|ch| match ch.as_str() {
-        "\\n" => "\n".to_owned(),
-        "\\r\\n" => "\r\n".to_owned(),
-        _ => ch,
-    })
+fn unicode_escape(v: &str) -> Option<String> {
+    match unicode_escape::decode(v) {
+        Ok(decoded_v) => Some(decoded_v),
+        Err(e) => {
+            // Debug
+            if cfg!(debug_assertions) {
+                println!("[warn] Unicode escape error: {}", e)
+            }
+            None
+        }
+    }
 }
 
 fn get_general_indent(
@@ -1169,7 +1180,7 @@ fn get_expression_result(
 ) -> Option<String> {
     match expression_type {
         ExpressionType::VariableName => data_ctx.get_string(&expression_name),
-        ExpressionType::String => Some(expression_name[1..expression_name.len() - 1].to_owned()),
+        ExpressionType::String => unicode_escape(&expression_name[1..expression_name.len() - 1]),
         ExpressionType::Number | ExpressionType::Boolean => Some(expression_name.to_owned()),
     }
 }
