@@ -6,6 +6,7 @@ use serde_json::Value;
 
 mod cli;
 mod fill;
+mod tpd;
 
 const TEMPLATE_SUFFIX: &str = ".template";
 const TEMPLATE_SUFFIX_SHORT: &str = ".tmpl";
