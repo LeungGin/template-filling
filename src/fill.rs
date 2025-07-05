@@ -237,11 +237,17 @@ impl Token {
         ctx.filter_and_update_token_attribute(token, template_bytes)
     }
 
-    pub fn new_tag(template_bytes: &[u8], ctx: &mut GenerateTokensContext, tag: Tag) -> Token {
+    pub fn new_tag(
+        template_bytes: &[u8],
+        ctx: &mut GenerateTokensContext,
+        tag: Tag,
+        start: usize,
+        end: usize,
+    ) -> Token {
         let token = Token::Tag(
             TokenContext {
-                start: 0,
-                end: 0,
+                start,
+                end,
                 in_tag: ctx.now_in_tag(),
                 first_in_line: false,
                 end_of_line: false,
@@ -491,7 +497,7 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                     let tag = generate_tag(&bytes[start_idx..i]);
                     match tag {
                         Tag::For(_, _) => {
-                            let token = Token::new_tag(template_bytes, &mut ctx, tag);
+                            let token = Token::new_tag(template_bytes, &mut ctx, tag, start_idx, i);
                             ctx.tag_token_stack.push(token);
                         }
                         Tag::EndFor => {
@@ -507,9 +513,13 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                                 {
                                     match head_tag {
                                         Tag::For(_, _) => {
-                                            if let Token::Tag(end_token_ctx, ..) =
-                                                Token::new_tag(template_bytes, &mut ctx, tag)
-                                            {
+                                            if let Token::Tag(end_token_ctx, ..) = Token::new_tag(
+                                                template_bytes,
+                                                &mut ctx,
+                                                tag,
+                                                start_idx,
+                                                i,
+                                            ) {
                                                 head_token_ctx.end_of_line =
                                                     end_token_ctx.end_of_line;
                                                 sub_ast.finish_build();
@@ -524,7 +534,7 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                             }
                         }
                         Tag::If(..) => {
-                            let token = Token::new_tag(template_bytes, &mut ctx, tag);
+                            let token = Token::new_tag(template_bytes, &mut ctx, tag, start_idx, i);
                             ctx.tag_token_stack.push(token);
                         }
                         Tag::EndIf => {
@@ -540,9 +550,13 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                                 {
                                     match head_tag {
                                         Tag::If(..) => {
-                                            if let Token::Tag(end_token_ctx, ..) =
-                                                Token::new_tag(template_bytes, &mut ctx, tag)
-                                            {
+                                            if let Token::Tag(end_token_ctx, ..) = Token::new_tag(
+                                                template_bytes,
+                                                &mut ctx,
+                                                tag,
+                                                start_idx,
+                                                i,
+                                            ) {
                                                 head_token_ctx.end_of_line =
                                                     end_token_ctx.end_of_line;
                                                 sub_ast.finish_build();
