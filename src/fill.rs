@@ -1,4 +1,4 @@
-use std::{cell::RefCell, collections::HashMap, mem, rc::Rc, str};
+use std::{cell::RefCell, collections::HashMap, rc::Rc, str};
 
 use chrono::Local;
 use serde::Serialize;
@@ -32,6 +32,7 @@ struct TemplateASTable {
     custom_envs: Vec<EnvDefine>,
     syntax_lines: Vec<SyntaxLine>,
     is_tag: bool,
+    min_indent_len: Option<usize>,
 }
 
 impl TemplateASTable {
@@ -41,6 +42,7 @@ impl TemplateASTable {
             custom_envs: Vec::new(),
             syntax_lines: Vec::new(),
             is_tag,
+            min_indent_len: None,
         };
         sf.new_line(None);
         sf
@@ -53,59 +55,59 @@ impl TemplateASTable {
         self.custom_envs.push(env_define);
     }
 
-    pub fn push_token(&mut self, token: Token) {
-        let line = self.current_line.as_mut().expect("No line can be found");
-        // Record indent
-        if let Token::Text(TokenContext { is_indent, .. }, ..) = &token {
-            if *is_indent {
-                return;
-            }
-        }
-        // Record token count
-        match &token {
-            Token::Text(_) => line.text_token_cnt += 1,
-            Token::Placeholder(_) => line.placeholder_token_cnt += 1,
-            Token::Tag(..) => line.tag_token_cnt += 1,
-        }
-        // Push token
-        line.tokens.push(token);
-    }
-
-    pub fn last_token_mut(&mut self) -> Option<&mut Token> {
-        let line = self.current_line.as_mut().expect("No line can be found");
-        line.tokens.last_mut()
-    }
-
     /// Execute this function when line finished
     pub fn new_line(&mut self, currnet_line_line_feed: Option<LineFeed>) {
         // push last line
-        if let Some(mut current_line) = self.current_line.take() {
-            if self.syntax_lines.len() > 0 || current_line.tokens.len() > 0 {
-                current_line.line_feed = currnet_line_line_feed;
-                self.syntax_lines.push(current_line);
-            }
-        }
+        self.push_line(false, currnet_line_line_feed);
         // new line
         self.current_line = Some(SyntaxLine::new());
     }
 
     pub fn finish_build(&mut self) {
-        if let Some(current_line) = self.current_line.take() {
-            if current_line.tokens.len() > 0 {
+        self.push_line(true, None)
+    }
+
+    fn push_line(&mut self, is_finish: bool, currnet_line_line_feed: Option<LineFeed>) {
+        if let Some(mut current_line) = self.current_line.take() {
+            if !is_finish && self.syntax_lines.len() > 0 || current_line.tokens.len() > 0 {
+                if current_line.tokens.len() > 0 {
+                    match current_line.tokens.last_mut().unwrap() {
+                        Token::Text(token_ctx)
+                        | Token::Placeholder(token_ctx)
+                        | Token::Tag(token_ctx, ..) => token_ctx.end_of_line = true,
+                    }
+                }
+
+                println!("self.min_indent_len.is_none()={}, current_line.indent_len={}, self.min_indent_len={:?}", self.min_indent_len.is_none(), current_line.indent_len, self.min_indent_len);
+                if self.min_indent_len.is_none()
+                    || current_line.indent_len < self.min_indent_len.unwrap()
+                {
+                    self.min_indent_len = Some(current_line.indent_len);
+                }
+
+                current_line.line_feed = currnet_line_line_feed;
                 self.syntax_lines.push(current_line);
             }
         }
+    }
+
+    pub fn push_token(&mut self, template_bytes: &[u8], token: Token) {
+        let line = self.current_line.as_mut().expect("No line can be found");
+        line.push_token(template_bytes, token);
     }
 }
 
 #[derive(Debug, Serialize)]
 struct SyntaxLine {
+    /// Vec<(indent_index_start, indent_index_end)>
+    indent: Option<Vec<(usize, usize)>>,
+    pub indent_len: usize,
     pub tokens: Vec<Token>,
+    pub line_feed: Option<LineFeed>,
     pub env_define_cnt: usize,
     pub text_token_cnt: usize,
     pub placeholder_token_cnt: usize,
     pub tag_token_cnt: usize,
-    pub line_feed: Option<LineFeed>,
 }
 
 #[derive(Debug, Serialize)]
@@ -119,13 +121,87 @@ enum LineFeed {
 impl SyntaxLine {
     pub fn new() -> Self {
         Self {
+            indent: None,
+            indent_len: 0,
             tokens: Vec::new(),
+            line_feed: None,
             env_define_cnt: 0,
             text_token_cnt: 0,
             placeholder_token_cnt: 0,
             tag_token_cnt: 0,
-            line_feed: None,
         }
+    }
+
+    pub fn push_token(&mut self, template_bytes: &[u8], mut token: Token) {
+        match token {
+            Token::Text(ref mut token_ctx) => {
+                if self.visible_token_count() <= 0 {
+                    let start = token_ctx.start;
+                    let end = token_ctx.end;
+                    let text = bytes_to_str(template_bytes, start, end);
+                    let non_blank_text = text
+                        .find(|c: char| !c.is_whitespace())
+                        .map(|pos| &text[pos..]);
+                    // Noblank text
+                    if let Some(non_blank_text) = non_blank_text {
+                        token_ctx.first_in_line = true;
+                        let non_blank_len = non_blank_text.len();
+                        // Indent + text line
+                        if non_blank_len < text.len() {
+                            self.push_indent(start, start + (text.len() - non_blank_len));
+                            token_ctx.start = end - non_blank_len;
+                        }
+                        self.tokens.push(token);
+                        self.text_token_cnt += 1;
+                    }
+                    // Blank text
+                    else {
+                        self.push_indent(start, end);
+                    }
+                } else {
+                    self.tokens.push(token);
+                    self.text_token_cnt += 1;
+                }
+            }
+            Token::Tag(ref mut token_ctx, _) => {
+                if self.visible_token_count() <= 0 {
+                    token_ctx.first_in_line = true;
+                }
+                self.tokens.push(token);
+                self.tag_token_cnt += 1;
+            }
+            Token::Placeholder(ref mut token_ctx) => {
+                if self.visible_token_count() <= 0 {
+                    token_ctx.first_in_line = true;
+                }
+                self.tokens.push(token);
+                self.placeholder_token_cnt += 1;
+            }
+        }
+    }
+
+    fn push_indent(&mut self, indent_start: usize, indent_end: usize) {
+        if self.indent.is_none() {
+            self.indent = Some(Vec::new());
+        }
+        self.indent
+            .as_mut()
+            .unwrap()
+            .push((indent_start, indent_end));
+        println!("indent_end={}, indent_start={}", indent_end, indent_start);
+        self.indent_len += indent_end - indent_start;
+    }
+
+    pub fn get_indent(&self, template_bytes: &[u8]) -> Option<String> {
+        if self.indent.is_none() {
+            return None;
+        }
+
+        let mut indent = String::new();
+        for (start, end) in self.indent.as_ref().unwrap() {
+            indent.push_str(bytes_to_str(template_bytes, *start, *end));
+        }
+        Some(indent)
     }
 
     pub fn visible_token_count(&self) -> usize {
@@ -166,31 +242,12 @@ struct TokenContext {
     in_tag: bool,
     first_in_line: bool,
     end_of_line: bool,
-    /// Which is the indent in row
-    is_indent: bool,
-    /// Vec<(indent_index_start, indent_index_end)>
-    indent: Option<Vec<(usize, usize)>>,
-}
-
-impl TokenContext {
-    pub fn get_indent(&self, template_bytes: &[u8]) -> Option<String> {
-        if let Some(indent_indexes) = &self.indent {
-            let mut indent = String::new();
-            for (start, end) in indent_indexes {
-                indent.push_str(bytes_to_str(template_bytes, *start, *end));
-            }
-            Some(indent)
-        } else {
-            None
-        }
-    }
 }
 
 #[derive(Debug, Serialize)]
 struct TagExtend {
     tag: Tag,
     sub_ast: TemplateASTable,
-    sub_token_min_indent_len: Option<usize>,
 }
 
 #[derive(Debug, Serialize)]
@@ -201,66 +258,40 @@ enum Token {
 }
 
 impl Token {
-    pub fn new_text(
-        template_bytes: &[u8],
-        ctx: &mut GenerateTokensContext,
-        start: usize,
-        end: usize,
-    ) -> Token {
-        let token = Token::Text(TokenContext {
+    pub fn new_text(ctx: &mut GenerateTokensContext, start: usize, end: usize) -> Token {
+        Token::Text(TokenContext {
             start,
             end,
             in_tag: ctx.now_in_tag(),
             first_in_line: false,
             end_of_line: false,
-            is_indent: false,
-            indent: None,
-        });
-        ctx.filter_and_update_token_attribute(token, template_bytes)
+        })
     }
 
-    pub fn new_placeholder(
-        template_bytes: &[u8],
-        ctx: &mut GenerateTokensContext,
-        start: usize,
-        end: usize,
-    ) -> Token {
-        let token = Token::Placeholder(TokenContext {
+    pub fn new_placeholder(ctx: &mut GenerateTokensContext, start: usize, end: usize) -> Token {
+        Token::Placeholder(TokenContext {
             start,
             end,
             in_tag: ctx.now_in_tag(),
             first_in_line: false,
             end_of_line: false,
-            is_indent: false,
-            indent: None,
-        });
-        ctx.filter_and_update_token_attribute(token, template_bytes)
+        })
     }
 
-    pub fn new_tag(
-        template_bytes: &[u8],
-        ctx: &mut GenerateTokensContext,
-        tag: Tag,
-        start: usize,
-        end: usize,
-    ) -> Token {
-        let token = Token::Tag(
+    pub fn new_tag(ctx: &mut GenerateTokensContext, tag: Tag, start: usize, end: usize) -> Token {
+        Token::Tag(
             TokenContext {
                 start,
                 end,
                 in_tag: ctx.now_in_tag(),
                 first_in_line: false,
                 end_of_line: false,
-                is_indent: false,
-                indent: None,
             },
             TagExtend {
                 tag,
                 sub_ast: TemplateASTable::new(true),
-                sub_token_min_indent_len: None,
             },
-        );
-        ctx.filter_and_update_token_attribute(token, template_bytes)
+        )
     }
 }
 
@@ -296,77 +327,6 @@ impl<'a> GenerateTokensContext {
         }
     }
 
-    // If Token::Text is blank text and at the beginning of current raw,
-    // return None and mark down it at self.indent_in_row
-    pub fn filter_and_update_token_attribute(
-        &mut self,
-        mut token: Token,
-        template_bytes: &[u8],
-    ) -> Token {
-        match token {
-            Token::Text(ref mut token_ctx) => {
-                // Is line feed char
-                if template_bytes[token_ctx.end - 1] == b'\n' {
-                    // text just is break symbol (\n or \r\n)
-                    if template_bytes[token_ctx.start] == b'\n'
-                        || token_ctx.end - token_ctx.start > 1
-                            && template_bytes[token_ctx.start] == b'\r'
-                            && template_bytes[token_ctx.start + 1] == b'\n'
-                    {
-                        // Mark the previous token as the last one
-                        if let Some(last_token) = self.template_ast.last_token_mut() {
-                            let (Token::Text(last_token_ctx)
-                            | Token::Placeholder(last_token_ctx)
-                            | Token::Tag(last_token_ctx, _)) = last_token;
-                            last_token_ctx.end_of_line = true;
-                        }
-                        // Need to return here;
-                        // otherwise, the '\r\n' or '\n' will be considered a whitespace character,
-                        // mark 'is_indent' falg and ignore.
-                        return token;
-                    }
-                    // text is 'text + break symbol'
-                    else {
-                        // Mark the current text token as the last one
-                        token_ctx.end_of_line = true;
-                    }
-                }
-                // General text
-                if !self.now_has_first_non_blank {
-                    let start = token_ctx.start;
-                    let end = token_ctx.end;
-                    let text = bytes_to_str(template_bytes, start, end);
-                    let non_blank_text = text
-                        .find(|c: char| !c.is_whitespace())
-                        .map(|pos| &text[pos..]);
-                    if let Some(non_blank_text) = non_blank_text {
-                        self.now_has_first_non_blank = true;
-                        let non_blank_len = non_blank_text.len();
-                        if non_blank_len < text.len() {
-                            self.indent_in_line
-                                .push((start, start + (text.len() - non_blank_len)));
-                        }
-                        token_ctx.first_in_line = true;
-                        token_ctx.indent = Some(mem::replace(&mut self.indent_in_line, Vec::new()));
-                        token_ctx.start = end - non_blank_len;
-                    } else {
-                        // is blank text and at the beginning of current raw
-                        token_ctx.is_indent = true;
-                        self.indent_in_line.push((start, end));
-                    }
-                }
-            }
-            Token::Tag(ref mut token_ctx, _) | Token::Placeholder(ref mut token_ctx) => {
-                if !self.now_has_first_non_blank {
-                    self.now_has_first_non_blank = true;
-                    token_ctx.first_in_line = true;
-                    token_ctx.indent = Some(mem::replace(&mut self.indent_in_line, Vec::new()));
-                }
-            }
-        }
-        token
-    }
-
     pub fn push_env(&mut self, env: EnvDefine) {
         if self.now_in_tag() {
             if let Token::Tag(_, TagExtend { sub_ast, .. }) =
@@ -381,52 +341,29 @@ impl<'a> GenerateTokensContext {
         }
     }
 
-    pub fn push_token(&mut self, mut token: Token) {
+    pub fn push_token(&mut self, template_bytes: &[u8], mut token: Token) {
         if self.now_in_tag() {
-            if let Token::Tag(
-                _,
-                TagExtend {
-                    sub_ast,
-                    sub_token_min_indent_len,
-                    ..
-                },
-            ) = self.tag_token_stack.last_mut().unwrap()
+            if let Token::Tag(_, TagExtend { sub_ast, .. }) =
+                self.tag_token_stack.last_mut().unwrap()
             {
                 // Finish Token::Tag line build
-                if let Token::Tag(_, TagExtend { sub_ast, .. }) = &mut token {
-                    sub_ast.finish_build();
-                }
-                // Record the min indent len
-                match &token {
-                    Token::Placeholder(token_ctx)
-                    | Token::Text(token_ctx)
-                    | Token::Tag(token_ctx, ..) => {
-                        if token_ctx.first_in_line {
-                            let token_indent_len =
-                                token_ctx.indent.as_ref().map_or(0, |indent_entries| {
-                                    let mut len = 0;
-                                    for (start, end) in indent_entries {
-                                        len += end - start;
-                                    }
-                                    len
-                                });
-                            if let Some(min_len) = sub_token_min_indent_len {
-                                if token_indent_len < *min_len {
-                                    *sub_token_min_indent_len = Some(token_indent_len);
-                                }
-                            } else {
-                                *sub_token_min_indent_len = Some(token_indent_len);
-                            }
-                        }
-                    }
+                if let Token::Tag(
+                    _,
+                    TagExtend {
+                        sub_ast: tag_sub_ast,
+                        ..
+                    },
+                ) = &mut token
+                {
+                    tag_sub_ast.finish_build();
                 }
                 // Record sub token
-                sub_ast.push_token(token);
+                sub_ast.push_token(template_bytes, token);
             } else {
                 panic!("An impossible error when push token")
             }
         } else {
-            self.template_ast.push_token(token);
+            self.template_ast.push_token(template_bytes, token);
         }
     }
 
@@ -466,8 +403,8 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
             if bytes[i] == b'#' && bytes[i + 1] == b'}' {
                 if let Some((Symbol::Raw, _)) = ctx.head_symbol_stack.last() {
                     let (_, start_idx) = ctx.head_symbol_stack.pop().unwrap();
-                    let token = Token::new_text(template_bytes, &mut ctx, start_idx, i);
-                    ctx.push_token(token);
+                    let token = Token::new_text(&mut ctx, start_idx, i);
+                    ctx.push_token(template_bytes, token);
                     ctx.last_start_pos = i + 2;
                 }
                 i += 2;
@@ -483,8 +420,8 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
             (b'{', b'%') => {
                 if ctx.last_start_pos < i {
                     let last_pos = ctx.last_start_pos;
-                    let token = Token::new_text(template_bytes, &mut ctx, last_pos, i);
-                    ctx.push_token(token);
+                    let token = Token::new_text(&mut ctx, last_pos, i);
+                    ctx.push_token(template_bytes, token);
                     ctx.last_start_pos = i;
                 }
                 ctx.head_symbol_stack.push((Symbol::Logical, i + 2));
@@ -497,13 +434,13 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                     let tag = generate_tag(&bytes[start_idx..i]);
                     match tag {
                         Tag::For(_, _) => {
-                            let token = Token::new_tag(template_bytes, &mut ctx, tag, start_idx, i);
+                            let token = Token::new_tag(&mut ctx, tag, start_idx, i);
                             ctx.tag_token_stack.push(token);
                         }
                         Tag::EndFor => {
                             if let Some(mut head_tag_token) = ctx.tag_token_stack.pop() {
                                 if let Token::Tag(
-                                    ref mut head_token_ctx,
+                                    _,
                                     TagExtend {
                                         tag: head_tag,
                                         sub_ast,
@@ -513,18 +450,8 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                                 {
                                     match head_tag {
                                         Tag::For(_, _) => {
-                                            if let Token::Tag(end_token_ctx, ..) = Token::new_tag(
-                                                template_bytes,
-                                                &mut ctx,
-                                                tag,
-                                                start_idx,
-                                                i,
-                                            ) {
-                                                head_token_ctx.end_of_line =
-                                                    end_token_ctx.end_of_line;
-                                                sub_ast.finish_build();
-                                                ctx.push_token(head_tag_token);
-                                            }
+                                            sub_ast.finish_build();
+                                            ctx.push_token(template_bytes, head_tag_token);
                                         }
                                         _ => panic!("Tag must be balanced"),
                                     }
@@ -534,13 +461,13 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                             }
                         }
                         Tag::If(..) => {
-                            let token = Token::new_tag(template_bytes, &mut ctx, tag, start_idx, i);
+                            let token = Token::new_tag(&mut ctx, tag, start_idx, i);
                             ctx.tag_token_stack.push(token);
                         }
                         Tag::EndIf => {
                             if let Some(mut head_tag_token) = ctx.tag_token_stack.pop() {
                                 if let Token::Tag(
-                                    ref mut head_token_ctx,
+                                    _,
                                     TagExtend {
                                         tag: head_tag,
                                         sub_ast,
@@ -550,18 +477,8 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                                 {
                                     match head_tag {
                                         Tag::If(..) => {
-                                            if let Token::Tag(end_token_ctx, ..) = Token::new_tag(
-                                                template_bytes,
-                                                &mut ctx,
-                                                tag,
-                                                start_idx,
-                                                i,
-                                            ) {
-                                                head_token_ctx.end_of_line =
-                                                    end_token_ctx.end_of_line;
-                                                sub_ast.finish_build();
-                                                ctx.push_token(head_tag_token);
-                                            }
+                                            sub_ast.finish_build();
+                                            ctx.push_token(template_bytes, head_tag_token);
                                         }
                                         _ => panic!("Tag must be balanced"),
                                     }
@@ -578,8 +495,8 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
             (b'{', b'$') => {
                 if ctx.last_start_pos < i {
                     let last_pos = ctx.last_start_pos;
-                    let token = Token::new_text(template_bytes, &mut ctx, last_pos, i);
-                    ctx.push_token(token);
+                    let token = Token::new_text(&mut ctx, last_pos, i);
+                    ctx.push_token(template_bytes, token);
                     ctx.last_start_pos = i;
                 }
                 ctx.head_symbol_stack.push((Symbol::Env, i + 2));
@@ -601,8 +518,8 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
             (b'{', b'{') => {
                 if ctx.last_start_pos < i {
                     let last_pos = ctx.last_start_pos;
-                    let token = Token::new_text(template_bytes, &mut ctx, last_pos, i);
-                    ctx.push_token(token);
+                    let token = Token::new_text(&mut ctx, last_pos, i);
+                    ctx.push_token(template_bytes, token);
                     ctx.last_start_pos = i;
                 }
                 ctx.head_symbol_stack.push((Symbol::Placeholder, i + 2));
@@ -612,8 +529,8 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
             (b'}', b'}') => {
                 if let Some((Symbol::Placeholder, _)) = ctx.head_symbol_stack.last() {
                     let (_, start_idx) = ctx.head_symbol_stack.pop().unwrap();
-                    let token = Token::new_placeholder(template_bytes, &mut ctx, start_idx, i);
-                    ctx.push_token(token);
+                    let token = Token::new_placeholder(&mut ctx, start_idx, i);
+                    ctx.push_token(template_bytes, token);
                     ctx.last_start_pos = i + 2;
                 }
                 i += 2;
@@ -621,8 +538,8 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
             (b'{', b'#') => {
                 if ctx.last_start_pos < i {
                     let last_pos = ctx.last_start_pos;
-                    let token = Token::new_text(template_bytes, &mut ctx, last_pos, i);
-                    ctx.push_token(token);
+                    let token = Token::new_text(&mut ctx, last_pos, i);
+                    ctx.push_token(template_bytes, token);
                     ctx.last_start_pos = i;
                 }
                 ctx.now_in_raw = true;
@@ -633,8 +550,8 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
             (b'\r', b'\n') => {
                 let last_start_pos = ctx.last_start_pos;
                 if last_start_pos < i {
-                    let token = Token::new_text(template_bytes, &mut ctx, last_start_pos, i);
-                    ctx.push_token(token);
+                    let token = Token::new_text(&mut ctx, last_start_pos, i);
+                    ctx.push_token(template_bytes, token);
                 }
                 ctx.new_line(Some(LineFeed::CRLF));
                 ctx.last_start_pos = i + 2;
@@ -643,8 +560,8 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
             (b'\n', _) => {
                 let last_start_pos = ctx.last_start_pos;
                 if last_start_pos < i {
-                    let token = Token::new_text(template_bytes, &mut ctx, last_start_pos, i);
-                    ctx.push_token(token);
+                    let token = Token::new_text(&mut ctx, last_start_pos, i);
+                    ctx.push_token(template_bytes, token);
                 }
                 ctx.new_line(Some(LineFeed::LF));
                 ctx.last_start_pos = i + 1;
@@ -655,9 +572,9 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
     }
     if ctx.last_start_pos < bytes.len() {
         let last_start_pos = ctx.last_start_pos;
-        let token = Token::new_text(template_bytes, &mut ctx, last_start_pos, bytes.len());
-        ctx.push_token(token);
-        ctx.new_line(None);
+        let token = Token::new_text(&mut ctx, last_start_pos, bytes.len());
+        ctx.push_token(template_bytes, token);
+        ctx.template_ast.finish_build();
     }
     ctx.template_ast
 }
@@ -797,7 +714,7 @@ impl<'a> AutoDataContext<'a> {
         self.get_string_by_step_in_key(self.data, key)
     }
 
-    pub fn get_usize(&self, key: &str) -> Option<usize> {
+    pub fn _get_usize(&self, key: &str) -> Option<usize> {
         let str = self.get_string(key);
         if let Some(str) = str {
             return Some(str.parse().unwrap());
@@ -906,26 +823,42 @@ fn fill(
     // Fill each line
     let mut filled = String::new();
     for (line_idx, line) in template_ast.syntax_lines.iter().enumerate() {
+        // Fill indent
+        let min_indent_len = template_ast.min_indent_len.unwrap_or(0);
+        let indent_filled = if is_tag_fill {
+            get_indent_in_tag(template_bytes, data_ctx, line, min_indent_len)
+        } else {
+            line.get_indent(template_bytes)
+        };
         // Fill token in line
         let mut filled_count = 0;
         for (token_idx, token) in line.tokens.iter().enumerate() {
-            // 以下规则TODO：
-            // 1、如果第一个token是Tag且第一个非Tag Token前进行过换行，则第一个非Tag Token前填充第一个Tag Token的indent
-            // 2、如果第一个token是Tag且第一个非Tag Token前未进行过换行，且第一个非Tag Token前未发生任何填充，则第一个非Tag Token前填充第一个Tag Token的indent
             let is_filled = match token {
                 Token::Text(token_ctx) => {
+                    if token_idx == 0 {
+                        if let Some(ref indent) = indent_filled {
+                            filled.push_str(indent);
+                        }
+                    }
                     fill_text(&mut filled, template_bytes, token_idx, data_ctx, token_ctx)
                 }
                 Token::Placeholder(token_ctx) => {
+                    if token_idx == 0 {
+                        if let Some(ref indent) = indent_filled {
+                            filled.push_str(indent);
+                        }
+                    }
                     fill_placeholder(&mut filled, template_bytes, token_idx, data_ctx, token_ctx)
                 }
                 Token::Tag(token_ctx, ext) => fill_tag(
                     &mut filled,
                     template_bytes,
+                    line,
                     token_idx,
                     data_ctx,
                     token_ctx,
                     ext,
+                    min_indent_len,
                 ),
             };
             if is_filled {
@@ -957,14 +890,10 @@ fn fill(
 fn fill_text(
     filled: &mut String,
     template_bytes: &[u8],
-    token_idx: usize,
-    data_ctx: &mut AutoDataContext,
+    _token_idx: usize,
+    _data_ctx: &mut AutoDataContext,
     token_ctx: &TokenContext,
 ) -> bool {
-    let indent = get_general_indent(template_bytes, token_idx, data_ctx, token_ctx);
-    if let Some(indent) = &indent {
-        filled.push_str(indent);
-    }
     filled.push_str(bytes_to_str(template_bytes, token_ctx.start, token_ctx.end));
     true
 }
@@ -973,15 +902,10 @@ fn fill_text(
 fn fill_placeholder(
     filled: &mut String,
     template_bytes: &[u8],
-    token_idx: usize,
+    _token_idx: usize,
     data_ctx: &mut AutoDataContext,
     token_ctx: &TokenContext,
 ) -> bool {
-    let indent = get_general_indent(template_bytes, token_idx, data_ctx, token_ctx);
-    if let Some(indent) = &indent {
-        filled.push_str(indent);
-    }
-
     let placeholder = bytes_to_str(template_bytes, token_ctx.start, token_ctx.end);
     let replaced = match data_ctx.get_string(placeholder) {
         Some(v) => v,
@@ -995,21 +919,23 @@ fn fill_placeholder(
 fn fill_tag(
     filled: &mut String,
     template_bytes: &[u8],
+    line: &SyntaxLine,
     token_idx: usize,
     data_ctx: &mut AutoDataContext,
     token_ctx: &TokenContext,
     tag_ext: &TagExtend,
+    min_indent_len_in_tag: usize,
 ) -> bool {
     data_ctx.push_scope();
-    data_ctx.set_scope_with_string(
-        "tag_sub_min_indent_len",
-        tag_ext.sub_token_min_indent_len.unwrap_or(0).to_string(),
-    );
 
-    let indent: Option<String> = get_tag_indent(template_bytes, token_idx, data_ctx, token_ctx);
-    if let Some(indent) = &indent {
-        filled.push_str(indent);
-    }
+    get_tag_indent(
+        template_bytes,
+        token_idx,
+        data_ctx,
+        token_ctx,
+        line,
+        min_indent_len_in_tag,
+    );
 
     let before_fill_len = filled.len();
     match &tag_ext.tag {
@@ -1068,6 +994,34 @@ fn fill_tag(
     filled.len() > before_fill_len
 }
 
+fn get_tag_indent(
+    template_bytes: &[u8],
+    token_index: usize,
+    data_ctx: &mut AutoDataContext,
+    token_ctx: &TokenContext,
+    line: &SyntaxLine,
+    min_indent_len_in_tag: usize,
+) -> Option<String> {
+    // First in row or first item in tag will be fill indent
+    if token_ctx.first_in_line || token_ctx.in_tag && token_index == 0 {
+        if token_ctx.in_tag {
+            let indent = get_indent_in_tag(template_bytes, &data_ctx, line, min_indent_len_in_tag);
+            if let Some(indent) = indent {
+                if !indent.is_empty() {
+                    data_ctx.set_scope_with_string("tag_indent", indent);
+                }
+            }
+        } else {
+            if let Some(indent) = line.get_indent(template_bytes) {
+                if !indent.is_empty() {
+                    data_ctx.set_scope_with_string("tag_indent", indent);
+                }
+            }
+        }
+    }
+    None
+}
+
 fn unicode_escape(v: &str) -> Option<String> {
     match unicode_escape::decode(v) {
         Ok(decoded_v) => Some(decoded_v),
@@ -1081,93 +1035,28 @@ fn unicode_escape(v: &str) -> Option<String> {
     }
 }
 
-fn get_general_indent(
-    template_bytes: &[u8],
-    token_index: usize,
-    data_ctx: &mut AutoDataContext,
-    token_ctx: &TokenContext,
-) -> Option<String> {
-    // First in row or first item in tag will be fill indent
-    if token_ctx.first_in_line || token_ctx.in_tag && token_index == 0 {
-        if token_ctx.in_tag {
-            get_indent_in_tag(template_bytes, &data_ctx, token_ctx)
-        } else {
-            // indent_base=raw default when Token in root
-            if let Some(indents) = &token_ctx.indent {
-                let mut indent = String::new();
-                for (start, end) in indents {
-                    indent.push_str(bytes_to_str(template_bytes, *start, *end));
-                }
-                Some(indent)
-            } else {
-                None
-            }
-        }
-    } else {
-        None
-    }
-}
-
-fn get_tag_indent(
-    template_bytes: &[u8],
-    token_index: usize,
-    data_ctx: &mut AutoDataContext,
-    token_ctx: &TokenContext,
-) -> Option<String> {
-    // First in row or first item in tag will be fill indent
-    if token_ctx.first_in_line || token_ctx.in_tag && token_index == 0 {
-        if token_ctx.in_tag {
-            let indent = get_indent_in_tag(template_bytes, &data_ctx, token_ctx);
-            if let Some(indent) = indent {
-                if !indent.is_empty() {
-                    data_ctx.set_scope_with_string("tag_indent", indent);
-                }
-            }
-        } else {
-            if let Some(indent) = token_ctx.get_indent(template_bytes) {
-                if !indent.is_empty() {
-                    data_ctx.set_scope_with_string("tag_indent", indent);
-                }
-            }
-        }
-    }
-    None
-}
-
-// If tag's atrribute indent_base = tag,
-//     indent = current_token_indent - tag's_sub_token_minimum_indent_length + tag's_indent
-// If tag's atrribute indent_base = raw,
-//     indent = current_token_raw_indent
 fn get_indent_in_tag(
     template_bytes: &[u8],
     data_ctx: &AutoDataContext,
-    token_ctx: &TokenContext,
+    line: &SyntaxLine,
+    min_indent_len_in_tag: usize,
 ) -> Option<String> {
     let indent_base = data_ctx
         .get_string("indent_base")
         .unwrap_or_else(|| String::from("tag"));
     match indent_base.as_str() {
-        "raw" => {
-            if let Some(indents) = &token_ctx.indent {
-                let mut indent = String::new();
-                for (start, end) in indents {
-                    indent.push_str(bytes_to_str(template_bytes, *start, *end));
-                }
-                Some(indent)
-            } else {
-                None
-            }
-        }
+        // If tag's atrribute indent_base = raw,
+        //     indent = current_token_raw_indent
+        "raw" => line.get_indent(template_bytes),
+        // If tag's atrribute indent_base = tag,
+        //     indent = current_token_indent - tag's_sub_token_minimum_indent_length + tag's_indent
         _ => {
-            // in_tag and indent_base=tag
-            let raw_indent = token_ctx.get_indent(template_bytes);
-            let tag_indent = data_ctx.get_string("tag_indent");
+            let raw_indent = line.get_indent(template_bytes);
+            let tag_indent = data_ctx.get_string("tag_indent"); // todo 检查到这里
             if let Some(mut raw_indent) = raw_indent {
-                let tag_sub_min_indent_len =
-                    data_ctx.get_usize("tag_sub_min_indent_len").unwrap_or(0);
-                if tag_sub_min_indent_len > 0 {
+                if min_indent_len_in_tag > 0 {
                     raw_indent = raw_indent
-                        .get(tag_sub_min_indent_len..)
+                        .get(min_indent_len_in_tag..)
                         .map(|o| o.to_owned())
                         .unwrap_or(String::new());
                 }
