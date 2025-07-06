@@ -78,7 +78,6 @@ impl TemplateASTable {
                     }
                 }
 
-                println!("self.min_indent_len.is_none()={}, current_line.indent_len={}, self.min_indent_len={:?}", self.min_indent_len.is_none(), current_line.indent_len, self.min_indent_len);
                 if self.min_indent_len.is_none()
                     || current_line.indent_len < self.min_indent_len.unwrap()
                 {
@@ -188,7 +187,6 @@ impl SyntaxLine {
             .as_mut()
             .unwrap()
             .push((indent_start, indent_end));
-        println!("indent_end={}, indent_start={}", indent_end, indent_start);
         self.indent_len += indent_end - indent_start;
     }
 
