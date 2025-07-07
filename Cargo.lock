@@ -331,13 +331,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "template-filling"
+name = "template_filling"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "template_filling_cli"
+version = "0.1.0"
+dependencies = [
  "clap",
  "serde",
  "serde_json",
+ "template_filling",
 ]
 
 [[package]]

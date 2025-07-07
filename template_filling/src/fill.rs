@@ -1,7 +1,6 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc, str};
 
 use chrono::Local;
-use serde::Serialize;
 use serde_json::{json, Value};
 
 use crate::tpd::unicode_escape;
@@ -12,7 +11,6 @@ pub fn fill_template(template_content: String, data: &Value) -> String {
     let template_ast = generate_tokens(bytes);
     // Debug
     if cfg!(debug_assertions) {
-        // println!("{}", serde_json::to_string(&template_ast).unwrap());
         println!("{:?}", template_ast);
     }
     // Fill with token
@@ -26,22 +24,20 @@ pub fn fill_template(template_content: String, data: &Value) -> String {
 }
 
 /// Template Abstract Syntax Table
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 struct TemplateASTable {
     current_line: Option<SyntaxLine>,
     custom_envs: Vec<EnvDefine>,
     syntax_lines: Vec<SyntaxLine>,
-    is_tag: bool,
     min_indent_len: Option<usize>,
 }
 
 impl TemplateASTable {
-    pub fn new(is_tag: bool) -> Self {
+    pub fn new() -> Self {
         let mut sf = Self {
             current_line: None,
             custom_envs: Vec::new(),
             syntax_lines: Vec::new(),
-            is_tag,
             min_indent_len: None,
         };
         sf.new_line(None);
@@ -96,7 +92,7 @@ impl TemplateASTable {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 struct SyntaxLine {
     /// Vec<(indent_index_start, indent_index_end)>
     indent: Option<Vec<(usize, usize)>>,
@@ -109,7 +105,7 @@ struct SyntaxLine {
     pub tag_token_cnt: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 enum LineFeed {
     /// \n
     LF,
@@ -220,7 +216,7 @@ enum Symbol {
     Raw,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 struct EnvDefine {
     start: usize,
     end: usize,
@@ -232,7 +228,7 @@ impl EnvDefine {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 struct TokenContext {
     start: usize,
     end: usize,
@@ -242,13 +238,13 @@ struct TokenContext {
     end_of_line: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 struct TagExtend {
     tag: Tag,
     sub_ast: TemplateASTable,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 enum Token {
     Text(TokenContext),
     Placeholder(TokenContext),
@@ -287,7 +283,7 @@ impl Token {
             },
             TagExtend {
                 tag,
-                sub_ast: TemplateASTable::new(true),
+                sub_ast: TemplateASTable::new(),
             },
         )
     }
@@ -316,7 +312,7 @@ impl<'a> GenerateTokensContext {
     fn new() -> Self {
         Self {
             last_start_pos: 0,
-            template_ast: TemplateASTable::new(false),
+            template_ast: TemplateASTable::new(),
             now_in_raw: false,
             now_has_first_non_blank: false,
             indent_in_line: Vec::new(),
@@ -577,7 +573,7 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
     ctx.template_ast
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 enum Tag {
     /// for [item] in [array]
     For(String, String),
@@ -587,7 +583,7 @@ enum Tag {
     EndIf,
 }
 
-#[derive(Debug, PartialEq, Serialize)]
+#[derive(Debug, PartialEq)]
 enum ExpressionType {
     VariableName,
     String,

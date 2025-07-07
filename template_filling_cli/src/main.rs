@@ -5,8 +5,6 @@ use cli::{Cli, Command};
 use serde_json::Value;
 
 mod cli;
-mod fill;
-mod tpd;
 
 const TEMPLATE_SUFFIX: &str = ".template";
 const TEMPLATE_SUFFIX_SHORT: &str = ".tmpl";
@@ -78,7 +76,7 @@ fn fill(
         let template_content = fs::read_to_string(&template_path).expect("Read template fail");
         let filled = if cfg!(debug_assertions) {
             let start = Instant::now();
-            let filled = fill::fill_template(template_content, &data);
+            let filled = template_filling::fill(template_content, &data);
             let elapsed = start.elapsed();
             println!("[debug] fill::fill_template time elapsed is {:?}", elapsed);
             if elapsed.as_millis() >= 5 {
@@ -86,7 +84,7 @@ fn fill(
             }
             filled
         } else {
-            fill::fill_template(template_content, &data)
+            template_filling::fill(template_content, &data)
         };
 
         // export or print result
