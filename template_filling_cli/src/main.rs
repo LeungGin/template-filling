@@ -76,7 +76,7 @@ fn fill(
         let template_content = fs::read_to_string(&template_path).expect("Read template fail");
         let filled = if cfg!(debug_assertions) {
             let start = Instant::now();
-            let filled = template_filling::fill(template_content, &data);
+            let filled = template_filling::fill(template_content, Some(&data));
             let elapsed = start.elapsed();
             println!("[debug] fill::fill_template time elapsed is {:?}", elapsed);
             if elapsed.as_millis() >= 5 {
@@ -84,7 +84,7 @@ fn fill(
             }
             filled
         } else {
-            template_filling::fill(template_content, &data)
+            template_filling::fill(template_content, Some(&data))
         };
 
         // export or print result

@@ -5,9 +5,10 @@ use serde_json::{json, Value};
 
 use crate::tpd::unicode_escape;
 
-pub fn fill_template(template_content: String, data: &Value) -> String {
+pub fn fill_template<T: AsRef<str>>(template_content: T, data_opt: Option<&Value>) -> String {
+    let data = data_opt.unwrap_or_else(|| &Value::Null);
     // Generate tokens
-    let bytes = template_content.as_bytes();
+    let bytes = template_content.as_ref().as_bytes();
     let template_ast = generate_tokens(bytes);
     // Debug
     if cfg!(debug_assertions) {
@@ -568,8 +569,8 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
         let last_start_pos = ctx.last_start_pos;
         let token = Token::new_text(&mut ctx, last_start_pos, bytes.len());
         ctx.push_token(template_bytes, token);
-        ctx.template_ast.finish_build();
     }
+    ctx.template_ast.finish_build();
     ctx.template_ast
 }
 
