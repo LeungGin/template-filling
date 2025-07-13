@@ -27,6 +27,8 @@ pub fn fill_template<T: AsRef<str>>(template_content: T, data_opt: Option<&Value
 /// Template Abstract Syntax Table
 #[derive(Debug)]
 struct TemplateASTable {
+    is_tag: bool,
+    has_line: bool,
     current_line: Option<SyntaxLine>,
     custom_envs: Vec<EnvDefine>,
     syntax_lines: Vec<SyntaxLine>,
@@ -34,8 +36,10 @@ struct TemplateASTable {
 }
 
 impl TemplateASTable {
-    pub fn new() -> Self {
+    pub fn new(is_tag: bool) -> Self {
         let mut sf = Self {
+            is_tag,
+            has_line: false,
             current_line: None,
             custom_envs: Vec::new(),
             syntax_lines: Vec::new(),
@@ -66,7 +70,7 @@ impl TemplateASTable {
 
     fn push_line(&mut self, is_finish: bool, currnet_line_line_feed: Option<LineFeed>) {
         if let Some(mut current_line) = self.current_line.take() {
-            if !is_finish && self.syntax_lines.len() > 0 || current_line.tokens.len() > 0 {
+            if self.should_push_line(&current_line, is_finish) {
                 if current_line.tokens.len() > 0 {
                     match current_line.tokens.last_mut().unwrap() {
                         Token::Text(token_ctx)
@@ -83,7 +87,21 @@ impl TemplateASTable {
 
                 current_line.line_feed = currnet_line_line_feed;
                 self.syntax_lines.push(current_line);
+                self.has_line = true;
             }
+        }
+    }
+
+    fn should_push_line(&self, line: &SyntaxLine, is_finish: bool) -> bool {
+        if self.is_tag {
+            if is_finish {
+                line.tokens.len() > 0
+            } else {
+                // First Line in Tag
+                self.has_line || line.is_valid_line() && !line.is_empty_line()
+            }
+        } else {
+            line.is_valid_line()
         }
     }
 
@@ -203,9 +221,13 @@ impl SyntaxLine {
         self.text_token_cnt + self.placeholder_token_cnt + self.tag_token_cnt
     }
 
-    pub fn should_fill_line_feed(&self) -> bool {
+    pub fn is_valid_line(&self) -> bool {
         // Will not fill line feed when only Token::Env in line
         self.visible_token_count() > 0 || self.env_define_cnt == 0
+    }
+
+    pub fn is_empty_line(&self) -> bool {
+        self.visible_token_count() == 0 && self.tag_token_cnt == 0 && self.env_define_cnt == 0
     }
 }
 
@@ -284,7 +306,7 @@ impl Token {
             },
             TagExtend {
                 tag,
-                sub_ast: TemplateASTable::new(),
+                sub_ast: TemplateASTable::new(true),
             },
         )
     }
@@ -313,7 +335,7 @@ impl<'a> GenerateTokensContext {
     fn new() -> Self {
         Self {
             last_start_pos: 0,
-            template_ast: TemplateASTable::new(),
+            template_ast: TemplateASTable::new(false),
             now_in_raw: false,
             now_has_first_non_blank: false,
             indent_in_line: Vec::new(),
@@ -391,8 +413,8 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
 
     let bytes = template_bytes;
     let mut i = 0;
-    let len = bytes.len().saturating_sub(1);
-    while i < len {
+    let i_max = bytes.len().saturating_sub(1);
+    while i < i_max {
         // Raw
         if ctx.now_in_raw {
             if bytes[i] == b'#' && bytes[i + 1] == b'}' {
@@ -562,13 +584,32 @@ fn generate_tokens(template_bytes: &[u8]) -> TemplateASTable {
                 ctx.last_start_pos = i + 1;
                 i += 1;
             }
+            (_, b'\n') => {
+                let last_start_pos = ctx.last_start_pos;
+                if last_start_pos < i + 1 {
+                    let token = Token::new_text(&mut ctx, last_start_pos, i + 1);
+                    ctx.push_token(template_bytes, token);
+                }
+                ctx.new_line(Some(LineFeed::LF));
+                ctx.last_start_pos = i + 2;
+                i += 2;
+            }
             _ => i += 1,
         }
     }
-    if ctx.last_start_pos < bytes.len() {
-        let last_start_pos = ctx.last_start_pos;
-        let token = Token::new_text(&mut ctx, last_start_pos, bytes.len());
-        ctx.push_token(template_bytes, token);
+    let last_start_pos = ctx.last_start_pos;
+    if last_start_pos == i_max {
+        if bytes[last_start_pos] == b'\n' {
+            ctx.new_line(Some(LineFeed::LF));
+        } else {
+            let token = Token::new_text(&mut ctx, last_start_pos, bytes.len());
+            ctx.push_token(template_bytes, token);
+        }
+    } else {
+        if ctx.last_start_pos < bytes.len() {
+            let token = Token::new_text(&mut ctx, last_start_pos, bytes.len());
+            ctx.push_token(template_bytes, token);
+        }
     }
     ctx.template_ast.finish_build();
     ctx.template_ast
@@ -869,7 +910,7 @@ fn fill(
             continue;
         }
         // Fill line feed
-        if line.should_fill_line_feed() {
+        if line.is_valid_line() {
             if let Some(line_feed) = &line.line_feed {
                 match line_feed {
                     LineFeed::LF => filled.push_str("\n"),
