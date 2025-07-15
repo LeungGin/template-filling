@@ -942,7 +942,7 @@ fn fill_placeholder(
     data_ctx: &mut AutoDataContext,
     token_ctx: &TokenContext,
 ) -> bool {
-    let placeholder = bytes_to_str(template_bytes, token_ctx.start, token_ctx.end);
+    let placeholder = bytes_to_str(template_bytes, token_ctx.start, token_ctx.end).trim();
     let replaced = match data_ctx.get_string(placeholder) {
         Some(v) => v,
         None => format!("{{{{{}: Not found}}}}", placeholder),

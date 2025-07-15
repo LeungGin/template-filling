@@ -42,33 +42,33 @@ fn test_equal() {
         "eq_r_bool": true, "eq_r_num": 123, "eq_r_str": "abc", "eq_r_unicode": "中文"
     });
     assert_eq!(
-        fill(r#"{% if $eq_l_bool %}Pass{% endif %}"#, Some(&val)),
+        fill(r#"{% if eq_l_bool %}Pass{% endif %}"#, Some(&val)),
         "Pass"
     );
     assert_eq!(
         fill(
-            r#"{% if $eq_l_bool == $eq_r_bool %}Pass{% endif %}"#,
+            r#"{% if eq_l_bool == eq_r_bool %}Pass{% endif %}"#,
             Some(&val)
         ),
         "Pass"
     );
     assert_eq!(
         fill(
-            r#"{% if $eq_l_num == $eq_r_num %}Pass{% endif %}"#,
+            r#"{% if eq_l_num == eq_r_num %}Pass{% endif %}"#,
             Some(&val)
         ),
         "Pass"
     );
     assert_eq!(
         fill(
-            r#"{% if $eq_l_str == $eq_r_str %}Pass{% endif %}"#,
+            r#"{% if eq_l_str == eq_r_str %}Pass{% endif %}"#,
             Some(&val)
         ),
         "Pass"
     );
     assert_eq!(
         fill(
-            r#"{% if $eq_l_unicode == $eq_r_unicode %}Pass{% endif %}"#,
+            r#"{% if eq_l_unicode == eq_r_unicode %}Pass{% endif %}"#,
             Some(&val)
         ),
         "Pass"
@@ -95,28 +95,28 @@ fn test_unequal() {
     });
     assert_eq!(
         fill(
-            r#"{% if $eq_l_bool != $eq_r_bool %}Pass{% endif %}"#,
+            r#"{% if eq_l_bool != eq_r_bool %}Pass{% endif %}"#,
             Some(&val)
         ),
         ""
     );
     assert_eq!(
         fill(
-            r#"{% if $eq_l_num != $eq_r_num %}Pass{% endif %}"#,
+            r#"{% if eq_l_num != eq_r_num %}Pass{% endif %}"#,
             Some(&val)
         ),
         ""
     );
     assert_eq!(
         fill(
-            r#"{% if $eq_l_str != $eq_r_str %}Pass{% endif %}"#,
+            r#"{% if eq_l_str != eq_r_str %}Pass{% endif %}"#,
             Some(&val)
         ),
         ""
     );
     assert_eq!(
         fill(
-            r#"{% if $eq_l_unicode != $eq_r_unicode %}Pass{% endif %}"#,
+            r#"{% if eq_l_unicode != eq_r_unicode %}Pass{% endif %}"#,
             Some(&val)
         ),
         ""

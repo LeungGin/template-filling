@@ -7,38 +7,35 @@ fn test_space() {
         "arrays": [1, 2, 3]
     });
     assert_eq!(
-        fill(r#"{%for i in $arrays%}{{$i}}{%endfor%}"#, Some(&val)),
+        fill(r#"{%for i in arrays%}{{i}}{%endfor%}"#, Some(&val)),
         "123"
     );
     assert_eq!(
-        fill(r#"{% for i in $arrays%}{{$i}}{%endfor%}"#, Some(&val)),
+        fill(r#"{% for i in arrays%}{{i}}{%endfor%}"#, Some(&val)),
         "123"
     );
     assert_eq!(
-        fill(r#"{%for i in $arrays %}{{$i}}{%endfor%}"#, Some(&val)),
+        fill(r#"{%for i in arrays %}{{i}}{%endfor%}"#, Some(&val)),
         "123"
     );
     assert_eq!(
-        fill(r#"{% for i in $arrays %}{{$i}}{%endfor%}"#, Some(&val)),
+        fill(r#"{% for i in arrays %}{{i}}{%endfor%}"#, Some(&val)),
         "123"
     );
     assert_eq!(
-        fill(r#"{%for i in $arrays%}{{$i}}{% endfor %}"#, Some(&val)),
+        fill(r#"{%for i in arrays%}{{i}}{% endfor %}"#, Some(&val)),
         "123"
     );
     assert_eq!(
-        fill(r#"{%for i in $arrays   %}{{$i}}{%endfor%}"#, Some(&val)),
+        fill(r#"{%for i in arrays   %}{{i}}{%endfor%}"#, Some(&val)),
         "123"
     );
     assert_eq!(
-        fill(r#"{%   for i in $arrays%}{{$i}}{%endfor%}"#, Some(&val)),
+        fill(r#"{%   for i in arrays%}{{i}}{%endfor%}"#, Some(&val)),
         "123"
     );
     assert_eq!(
-        fill(
-            r#"{%  for  i  in  $arrays   %}{{$i}}{%endfor%}"#,
-            Some(&val)
-        ),
+        fill(r#"{%  for  i  in  arrays   %}{{i}}{%endfor%}"#, Some(&val)),
         "123"
     );
 }
@@ -50,15 +47,15 @@ fn test_join_with() {
     });
     assert_eq!(
         fill(
-            r#"{% for i in $arrays %}{$ join_with = , $}{{ $i }}{% endfor %}"#,
+            r#"{% for i in arrays %}{$ join_with = , $}{{ i }}{% endfor %}"#,
             Some(&val)
         ),
         "1,2,3"
     );
     assert_eq!(
         fill(
-            r#"{% for i in $arrays %}
-{{ $i }}
+            r#"{% for i in arrays %}{$ join_with = , $}
+{{ i }}
 {% endfor %}"#,
             Some(&val)
         ),
@@ -66,8 +63,9 @@ fn test_join_with() {
     );
     assert_eq!(
         fill(
-            r#"{% for i in $arrays %}
-    {{ $i }}
+            r#"{% for i in arrays %}
+{$ join_with = , $}
+{{ i }}
 {% endfor %}"#,
             Some(&val)
         ),
@@ -75,16 +73,26 @@ fn test_join_with() {
     );
     assert_eq!(
         fill(
-            r#"{% for i in $arrays %}{$ join_with = \n $}{{ $i }}{% endfor %}"#,
+            r#"{% for i in arrays %}
+    {$ join_with = , $}
+    {{ i }}
+{% endfor %}"#,
+            Some(&val)
+        ),
+        "1,2,3"
+    );
+    assert_eq!(
+        fill(
+            r#"{% for i in arrays %}{$ join_with = \n $}{{ i }}{% endfor %}"#,
             Some(&val)
         ),
         "1\n2\n3"
     );
     assert_eq!(
         fill(
-            r#"{% for i in $arrays %}
+            r#"{% for i in arrays %}
     {$ join_with = \n $}
-    {{ $i }}
+    {{ i }}
 {% endfor %}"#,
             Some(&val)
         ),
@@ -92,7 +100,7 @@ fn test_join_with() {
     );
     assert_eq!(
         fill(
-            r#"{% for i in $arrays %}{$ join_with = 分隔 $}{{ $i }}{% endfor %}"#,
+            r#"{% for i in arrays %}{$ join_with = 分隔 $}{{ i }}{% endfor %}"#,
             Some(&val)
         ),
         "1分隔2分隔3"
