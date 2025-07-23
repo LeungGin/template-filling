@@ -3,52 +3,52 @@ use template_filling::fill;
 
 #[test]
 fn test_space() {
-    let val = json!({
+    let data = json!({
         "arrays": [1, 2, 3]
     });
     assert_eq!(
-        fill(r#"{%for i in arrays%}{{i}}{%endfor%}"#, Some(&val)),
+        fill(r#"{%for i in arrays%}{{i}}{%endfor%}"#, Some(&data)),
         "123"
     );
     assert_eq!(
-        fill(r#"{% for i in arrays%}{{i}}{%endfor%}"#, Some(&val)),
+        fill(r#"{% for i in arrays%}{{i}}{%endfor%}"#, Some(&data)),
         "123"
     );
     assert_eq!(
-        fill(r#"{%for i in arrays %}{{i}}{%endfor%}"#, Some(&val)),
+        fill(r#"{%for i in arrays %}{{i}}{%endfor%}"#, Some(&data)),
         "123"
     );
     assert_eq!(
-        fill(r#"{% for i in arrays %}{{i}}{%endfor%}"#, Some(&val)),
+        fill(r#"{% for i in arrays %}{{i}}{%endfor%}"#, Some(&data)),
         "123"
     );
     assert_eq!(
-        fill(r#"{%for i in arrays%}{{i}}{% endfor %}"#, Some(&val)),
+        fill(r#"{%for i in arrays%}{{i}}{% endfor %}"#, Some(&data)),
         "123"
     );
     assert_eq!(
-        fill(r#"{%for i in arrays   %}{{i}}{%endfor%}"#, Some(&val)),
+        fill(r#"{%for i in arrays   %}{{i}}{%endfor%}"#, Some(&data)),
         "123"
     );
     assert_eq!(
-        fill(r#"{%   for i in arrays%}{{i}}{%endfor%}"#, Some(&val)),
+        fill(r#"{%   for i in arrays%}{{i}}{%endfor%}"#, Some(&data)),
         "123"
     );
     assert_eq!(
-        fill(r#"{%  for  i  in  arrays   %}{{i}}{%endfor%}"#, Some(&val)),
+        fill(r#"{%  for  i  in  arrays   %}{{i}}{%endfor%}"#, Some(&data)),
         "123"
     );
 }
 
 #[test]
 fn test_join_with() {
-    let val = json!({
+    let data = json!({
         "arrays": [1, 2, 3]
     });
     assert_eq!(
         fill(
             r#"{% for i in arrays %}{$ join_with = , $}{{ i }}{% endfor %}"#,
-            Some(&val)
+            Some(&data)
         ),
         "1,2,3"
     );
@@ -57,7 +57,7 @@ fn test_join_with() {
             r#"{% for i in arrays %}{$ join_with = , $}
 {{ i }}
 {% endfor %}"#,
-            Some(&val)
+            Some(&data)
         ),
         "1,2,3"
     );
@@ -67,7 +67,7 @@ fn test_join_with() {
 {$ join_with = , $}
 {{ i }}
 {% endfor %}"#,
-            Some(&val)
+            Some(&data)
         ),
         "1,2,3"
     );
@@ -77,14 +77,14 @@ fn test_join_with() {
     {$ join_with = , $}
     {{ i }}
 {% endfor %}"#,
-            Some(&val)
+            Some(&data)
         ),
         "1,2,3"
     );
     assert_eq!(
         fill(
             r#"{% for i in arrays %}{$ join_with = \n $}{{ i }}{% endfor %}"#,
-            Some(&val)
+            Some(&data)
         ),
         "1\n2\n3"
     );
@@ -94,14 +94,14 @@ fn test_join_with() {
     {$ join_with = \n $}
     {{ i }}
 {% endfor %}"#,
-            Some(&val)
+            Some(&data)
         ),
         "1\n2\n3"
     );
     assert_eq!(
         fill(
             r#"{% for i in arrays %}{$ join_with = 分隔 $}{{ i }}{% endfor %}"#,
-            Some(&val)
+            Some(&data)
         ),
         "1分隔2分隔3"
     );

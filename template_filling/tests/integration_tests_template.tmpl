@@ -2,18 +2,18 @@
 
 1
 -- The defaut value of indent_base is tag
-{$ indent_base = tag $}
+{$ indent_base = "tag" $}
 
 -- The kind of Symbol has: {#{%..%} {$..$} {{..}} {#..#}#}, and it only a Raw Token demo
 
 /*
-Create by {% for author in authors %}{$ join_with = , $}{{author}}{% endfor %} 
+Create by {% for author in authors %}{$ join_with = "," $}{{author}}{% endfor %} 
 */
 
 -- Table {{table.name}}
 CREATE TABLE {{table.name}} (
     {% if 1 == 1 %}
-      {$ indent_base = raw $}
+      {$ indent_base = "raw" $}
 -- This is indent_base=raw demo 1: no indent
     -- This is indent_base=raw demo 2: 4 space indent
     {% endif %}
@@ -22,7 +22,7 @@ CREATE TABLE {{table.name}} (
     last_name VARCHAR(50) NOT NULL,
     -- Default indent_base is 'inherit', here is 'tag' because of global env define is 'tag'
     {% for field in custom_fields %}
-      {$ join_with = \n $}-- After 'env' Token
+      {$ join_with = "\n" $}-- After 'env' Token
       -- $index is {{$index}}, $max is {{$max}}
       {{field.name}} {{field.type}}, -- {{field.comment}}
       {% if   $index ==      $max %}-- [TestCase] first item in tag, should be fill the indent
@@ -41,8 +41,8 @@ COMMENT ON COLUMN {{table.name}}.first_name IS 'First name';
 COMMENT ON COLUMN {{table.name}}.last_name IS 'Last name';
 -- Define custom indent_base as 'raw', indent based on the literal indentation
 {% for field in custom_fields %}
-  {$ indent_base = raw $}
-  {$ join_with = \n $}
+  {$ indent_base = "raw" $}
+  {$ join_with = "\n" $}
   COMMENT ON COLUMN {{table.name}}.{{field.name}} IS '{{field.comment}}';
 {% endfor %}
 COMMENT ON COLUMN {{table.name}}.created_at IS 'Created at';
@@ -54,9 +54,9 @@ COMMENT ON COLUMN {{table.name}}.updated_at IS 'Updated at';
 {% endif %}
 
 -- Single line join
-{% for field in single_line_join_fields %}{$ join_with = , $}{{field}}{% endfor %}
+{% for field in single_line_join_fields %}{$ join_with = "," $}{{field}}{% endfor %}
 -- Mixed char and line feed join
-{% for field in single_line_join_fields %}{$ join_with = ,\n $}{{field}}{% endfor %}
+{% for field in single_line_join_fields %}{$ join_with = ",\n" $}{{field}}{% endfor %}
 
 {% if true %}
   [Pass] Tag::If single boolean condition

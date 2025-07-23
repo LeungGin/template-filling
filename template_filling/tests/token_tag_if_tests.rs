@@ -37,39 +37,39 @@ fn test_equal() {
         fill(r#"{% if "中文" == "中文" %}Pass{% endif %}"#, None),
         "Pass"
     );
-    let val = json!({
+    let data = json!({
         "eq_l_bool": true, "eq_l_num": 123, "eq_l_str": "abc", "eq_l_unicode": "中文",
         "eq_r_bool": true, "eq_r_num": 123, "eq_r_str": "abc", "eq_r_unicode": "中文"
     });
     assert_eq!(
-        fill(r#"{% if eq_l_bool %}Pass{% endif %}"#, Some(&val)),
+        fill(r#"{% if eq_l_bool %}Pass{% endif %}"#, Some(&data)),
         "Pass"
     );
     assert_eq!(
         fill(
             r#"{% if eq_l_bool == eq_r_bool %}Pass{% endif %}"#,
-            Some(&val)
+            Some(&data)
         ),
         "Pass"
     );
     assert_eq!(
         fill(
             r#"{% if eq_l_num == eq_r_num %}Pass{% endif %}"#,
-            Some(&val)
+            Some(&data)
         ),
         "Pass"
     );
     assert_eq!(
         fill(
             r#"{% if eq_l_str == eq_r_str %}Pass{% endif %}"#,
-            Some(&val)
+            Some(&data)
         ),
         "Pass"
     );
     assert_eq!(
         fill(
             r#"{% if eq_l_unicode == eq_r_unicode %}Pass{% endif %}"#,
-            Some(&val)
+            Some(&data)
         ),
         "Pass"
     );
@@ -89,35 +89,35 @@ fn test_unequal() {
         fill(r#"{% if "中文" != "中文" %}Pass{% endif %}"#, None),
         ""
     );
-    let val = json!({
+    let data = json!({
         "eq_l_bool": true, "eq_l_num": 123, "eq_l_str": "abc", "eq_l_unicode": "中文",
         "eq_r_bool": true, "eq_r_num": 123, "eq_r_str": "abc", "eq_r_unicode": "中文"
     });
     assert_eq!(
         fill(
             r#"{% if eq_l_bool != eq_r_bool %}Pass{% endif %}"#,
-            Some(&val)
+            Some(&data)
         ),
         ""
     );
     assert_eq!(
         fill(
             r#"{% if eq_l_num != eq_r_num %}Pass{% endif %}"#,
-            Some(&val)
+            Some(&data)
         ),
         ""
     );
     assert_eq!(
         fill(
             r#"{% if eq_l_str != eq_r_str %}Pass{% endif %}"#,
-            Some(&val)
+            Some(&data)
         ),
         ""
     );
     assert_eq!(
         fill(
             r#"{% if eq_l_unicode != eq_r_unicode %}Pass{% endif %}"#,
-            Some(&val)
+            Some(&data)
         ),
         ""
     );

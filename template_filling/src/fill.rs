@@ -691,7 +691,7 @@ fn generate_tag(tag_bytes: &[u8]) -> Tag {
     }
 }
 
-/// Valid variable name is start with a-z or A-Z or _
+/// Valid variable name is start with a-z or A-Z or _ or $ (System variable name usually start with $)
 /// Valid string is wrapped in '"' (For example, "abc")
 /// Valid number is only digits (For example, 123 or 123.1)
 fn assess_expression(variable_name: &str) -> ExpressionType {
@@ -849,8 +849,8 @@ fn fill(
 ) -> String {
     if is_need_set_env {
         for env in &template_ast.custom_envs {
-            let (k, v) = get_kv_from_env_define(template_bytes, env.start, env.end);
-            if let Some(decoded_v) = unicode_escape(v) {
+            let (k, v) = get_kv_from_env_define(template_bytes, env.start, env.end, &data_ctx);
+            if let Some(decoded_v) = unicode_escape(&v) {
                 data_ctx.set_scope_with_string(k, decoded_v);
             }
         }
@@ -980,8 +980,9 @@ fn fill_tag(
                 // Set Tag::For public env variables
                 data_ctx.set_scope_with_string("$max", (array.len() - 1).to_string());
                 for env in &tag_ext.sub_ast.custom_envs {
-                    let (k, v) = get_kv_from_env_define(template_bytes, env.start, env.end);
-                    if let Some(decoded_v) = unicode_escape(v) {
+                    let (k, v) =
+                        get_kv_from_env_define(template_bytes, env.start, env.end, &data_ctx);
+                    if let Some(decoded_v) = unicode_escape(&v) {
                         data_ctx.set_scope_with_string(k, decoded_v);
                     }
                 }
@@ -1124,12 +1125,25 @@ fn get_expression_result(
     }
 }
 
-/// return (env_key, env_value)
-fn get_kv_from_env_define(template_bytes: &[u8], start: usize, end: usize) -> (&str, &str) {
+/// @return (env_key, env_value)
+fn get_kv_from_env_define<'a>(
+    template_bytes: &'a [u8],
+    start: usize,
+    end: usize,
+    data_ctx: &'a AutoDataContext<'a>,
+) -> (&'a str, String) {
     let (k, v) = bytes_to_str(template_bytes, start, end)
         .split_once("=")
         .unwrap();
-    (k.trim(), v.trim())
+    let k = k.trim();
+    let k_type = assess_expression(k);
+    if k_type != ExpressionType::VariableName {
+        panic!("Token::Env define error: {}", k);
+    }
+    let v = v.trim();
+    let v_type = assess_expression(v);
+    let v = get_expression_result(data_ctx, &v_type, v).unwrap_or_default();
+    (k, v)
 }
 
 fn normalize_spaces(text: &str) -> String {
