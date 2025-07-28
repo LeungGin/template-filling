@@ -8,6 +8,9 @@ use clap::Parser;
 use cli::{Cli, Command};
 use serde_json::Value;
 
+#[cfg(test)]
+mod tests;
+
 mod cli;
 
 const TEMPLATE_SUFFIX: &str = ".template";
@@ -80,7 +83,7 @@ fn fill(
 fn fill_0(template: &Template, data: &Option<Value>) {
     // Filling
     let template_content = template.get_content();
-    let filled = if cfg!(debug_assertions) {
+    let filled = if cfg!(debug_assertions) && cfg!(not(test)) {
         let start = Instant::now();
         let filled = template_filling::fill(template_content, data.as_ref());
         let elapsed = start.elapsed();

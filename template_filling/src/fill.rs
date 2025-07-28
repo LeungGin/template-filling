@@ -11,7 +11,7 @@ pub fn fill_template<T: AsRef<str>>(template_content: T, data_opt: Option<&Value
     let bytes = template_content.as_ref().as_bytes();
     let template_ast = generate_tokens(bytes);
     // Debug
-    if cfg!(debug_assertions) {
+    if cfg!(debug_assertions) && cfg!(not(test)) {
         println!("{:?}", template_ast);
     }
     // Fill with token
@@ -1064,7 +1064,7 @@ fn unicode_escape(v: &str) -> Option<String> {
         Ok(decoded_v) => Some(decoded_v),
         Err(e) => {
             // Debug
-            if cfg!(debug_assertions) {
+            if cfg!(debug_assertions) && cfg!(not(test)) {
                 println!("[warn] Unicode escape error: {}", e)
             }
             None
