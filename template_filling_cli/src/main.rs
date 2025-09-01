@@ -210,6 +210,9 @@ fn find_all_available_templates(
     }
 }
 
+const FILE_NAME_LABEL_PART: &str = "_@p_";
+const FILE_NAME_LABEL_VERSION: &str = "_@v_";
+
 fn package_template(
     template_path: &Path,
     template_tag: &Option<String>,
@@ -223,19 +226,20 @@ fn package_template(
         .to_owned();
 
     // tagname_@p_template_name_1.sql_@v_1.0.tmpl
-    let part_position = find_unicode_pos(&template_name, "_@p_");
-    let version_position = find_unicode_pos(&template_name, "_@v_");
+    let part_position = find_unicode_pos(&template_name, FILE_NAME_LABEL_PART);
+    let version_position = find_unicode_pos(&template_name, FILE_NAME_LABEL_VERSION);
 
     let output_file_name = if let Some(p_pos) = part_position {
-        if p_pos + 7 + 1 < template_name.len() {
+        let part_val_start = p_pos + FILE_NAME_LABEL_PART.len();
+        if part_val_start < template_name.len() {
             if let Some(v_pos) = version_position {
-                if p_pos + 7 + 1 < v_pos {
-                    template_name[p_pos + 8..v_pos].to_owned()
+                if part_val_start < v_pos {
+                    template_name[part_val_start..v_pos].to_owned()
                 } else {
                     generate_random_file_name(template_tag)
                 }
             } else {
-                template_name[p_pos + 8..].to_owned()
+                template_name[part_val_start..].to_owned()
             }
         } else {
             generate_random_file_name(template_tag)
@@ -245,10 +249,11 @@ fn package_template(
     };
 
     let version = if let Some(v_pos) = version_position {
+        let ver_val_start = v_pos + FILE_NAME_LABEL_VERSION.len();
         if (part_position.is_some() && v_pos > part_position.unwrap() || part_position.is_none())
-            && v_pos + 4 + 1 < template_name.len()
+            && ver_val_start < template_name.len()
         {
-            Some(template_name[v_pos + 4 + 1..].to_owned())
+            Some(template_name[ver_val_start..].to_owned())
         } else {
             None
         }
